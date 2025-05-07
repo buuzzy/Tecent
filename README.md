@@ -163,3 +163,9 @@ check_token_status()
 ## 📄 开源协议
 
 MIT License - 详见 [LICENSE](LICENSE) 文件 
+
+## 本地环境说明
+Python 环境是由操作系统或外部工具（比如 Homebrew）管理的。为了保护系统级的 Python 安装，直接使用 pip3 install 来安装包到全局环境通常是不被允许的。需要通过激活虚拟环境（前提是创建虚拟环境）来完成
+
+   python3 -m venv venv
+   source venv/bin/activate
