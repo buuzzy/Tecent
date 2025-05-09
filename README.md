@@ -2,27 +2,56 @@
 
 <div align="center">
 
-基于 Model Context Protocol (MCP) 的智能股票数据助手
+**基于 Model Context Protocol (MCP) 的智能股票数据助手**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 
 </div>
 
-该项目基于 zhewenzhang（OJO）的开源项目 [tushare_MCP](https://github.com/zhewenzhang/tushare_MCP) 进行了二次开发，在此感谢！在原作的基础上，增加的能力包括：
-1、更多工具的调用，比方说股票的行情数据、更深度的财务数据以及指数数据等。
+<br>
+
+该项目基于 Tushare 的金融数据接口进行开发，支持的能力包括：
+
+1、工具调用，比方说股票的行情数据、更深度的财务数据以及指数数据等。
+
 2、提供安全的 Tushare Token 配置与状态检查机制。
+
 3、通过 FastAPI 封装，提供标准化的 HTTP API 接口，方便与其他应用集成。
+
+<br>
+为了方便大家体验，我已经完成了在线部署，你可以使用下面的代码进行体验：
+
+```{
+  "mcpServers": {
+    "Tushare_Tools(Normal)": {
+      "url": "https://mcp-api.chatbotbzy.top/sse",
+      "type": "sse"
+    }
+  }
+}
+```
+
+[👉使用 cherry studio 快速体验教程](https://doc.weixin.qq.com/doc/w3_AbQAFgbhALUCN01st0nWWQfyyiN0f?scode=AJEAIQdfAAo9jULS9NAbQAFgbhALU)
 
 ## ✨ 已支持能力
 *   **全面的股票数据查询：**
     *   提供股票基本信息、实时行情（日线、指标）、历史股价变动查询。
     *   支持通过股票代码或名称进行智能搜索。
+
+<br>
+
 *   **深度财务数据分析：**
     *   获取上市公司详细财务报表，包括利润表、资产负债表、现金流量表。
     *   查询关键财务指标数据。
+
+<br>
+
 *   **指数与市场数据覆盖：**
     *   支持主流指数的基本信息查询、成分股获取及全球指数行情。
+
+<br>
+
 *   **股东及公司基本面信息：**
     *   查询股东户数、十大股东信息、每日股本市值以及股权质押明细。
 
@@ -38,7 +67,7 @@
 ### 环境要求
 
 *   Python 3.8+
-*   有效的 Tushare Pro 账号和 API Token (获取地址: [Tushare Pro Token 申请页面](https://tushare.pro/user/token)，请自行注册)
+*   Tushare 账号和 API Token (获取地址: [Tushare Pro Token 申请页面](https://tushare.pro/user/token)，请自行注册)
 
 ### 安装步骤
 
@@ -83,8 +112,49 @@
 ```bash
 python server.py
 ```
-在 AI IDE 软件中（如 Cursor 或 Trae 的 MCP 服务中添加对应的 Servers
+在 AI IDE 软件中（如 Cursor 或 Trae） 的 MCP 服务中添加对应的 Servers
 
 ## 📄 开源协议
 
 MIT License - 详见 [LICENSE](LICENSE) 文件 
+
+## 其他说明
+## 本地环境说明
+Python 环境是由操作系统或外部工具（比如 Homebrew）管理的。为了保护系统级的 Python 安装，直接使用 pip3 install 来安装包到全局环境通常是不被允许的。需要通过激活虚拟环境（前提是创建虚拟环境）来完成
+
+   ```bash
+   python3 -m venv venv
+   ```
+   
+   ```bash
+   source venv/bin/activate
+   ```
+
+## cloudflare 服务说明
+cloudflared 安装命令：
+```bash
+brew install cloudflared && 
+sudo cloudflared service install eyJhIjoiNmQ0YzM1ODQ2ZTQxMzliYTU3NDUzYWRiZWEyOWVmOTkiLCJ0IjoiNjA5NTY4MjQtM2JiZS00ODNiLWEyM2EtZDZmMjE3M2IyZTI1IiwicyI6Ill6UXdNV1k0WmprdE5qSTFOUzAwWmpBeUxXSXpZMkl0Wm1RME5HSTFOekl5WXpkaiJ9
+```
+
+tunnels 启用命令：
+```bash
+sudo cloudflared service install eyJhIjoiNmQ0YzM1ODQ2ZTQxMzliYTU3NDUzYWRiZWEyOWVmOTkiLCJ0IjoiNjA5NTY4MjQtM2JiZS00ODNiLWEyM2EtZDZmMjE3M2IyZTI1IiwicyI6Ill6UXdNV1k0WmprdE5qSTFOUzAwWmpBeUxXSXpZMkl0Wm1RME5HSTFOekl5WXpkaiJ9
+```
+
+tunnels 卸载命令：
+```bash
+sudo cloudflared service uninstall
+```
+
+## 新增 mcp 工具后需要重启持久化服务
+
+停止服务：
+```bash
+launchctl unload ~/Library/LaunchAgents/com.nakocai.tushare-mcp-api.plist
+```
+
+启动服务：
+```bash
+launchctl load ~/Library/LaunchAgents/com.nakocai.tushare-mcp-api.plist
+```

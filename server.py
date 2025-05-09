@@ -1350,6 +1350,316 @@ def get_pledge_detail(ts_code: str) -> str:
         traceback.print_exc(file=sys.stderr)
         return f"获取股权质押明细失败：{str(e)}"
 
+@mcp.tool()
+def get_fina_mainbz(ts_code: str, period: str, type: Optional[str] = None, limit: Optional[int] = None) -> str:
+    """
+    获取上市公司主营业务构成。
+
+    参数:
+        ts_code: 股票代码 (例如: 000001.SZ)
+        period: 报告期 (YYYYMMDD格式, 例如: 20231231)
+        type: 构成类型 ('P'代表按产品, 'D'代表按地区，默认为'P')
+        limit: 显示条数上限 (默认为10)
+    """
+    type_param = type if type else 'P'
+    limit_param = limit if limit is not None and limit > 0 else 10
+    debug_params = f"ts_code='{ts_code}', period='{period}', type='{type_param}', limit={limit_param}"
+    print(f"DEBUG: Tool get_fina_mainbz called with {debug_params}.", file=sys.stderr, flush=True)
+
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not ts_code or not period:
+        return "错误: 股票代码 (ts_code) 和报告期 (period) 是必需的。"
+    if not (len(period) == 8 and period.isdigit()):
+        return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
+
+    try:
+        pro = ts.pro_api()
+        stock_name = _get_stock_name(pro, ts_code)
+        
+        # Fields from Tushare: ts_code, ann_date, end_date, bz_item, bz_sales, bz_profit, bz_cost, curr_type, update_flag
+        req_fields = 'ts_code,ann_date,end_date,bz_item,bz_sales,bz_profit,bz_cost,curr_type'
+        
+        api_params = {
+            'ts_code': ts_code,
+            'period': period,
+            'type': type_param,
+            'fields': req_fields
+        }
+        
+        df_mainbz_list = _fetch_latest_report_data(
+            pro.fina_mainbz,
+            result_period_field_name='end_date', # 'end_date' in fina_mainbz output is the report period
+            result_period_value=period,
+            is_list_result=True, # We want all business items for the latest announcement of this period
+            **api_params
+        )
+
+        if df_mainbz_list is None or df_mainbz_list.empty:
+            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} (类型: {type_param}) 的主营业务构成数据。"
+
+        latest_ann_date = df_mainbz_list['ann_date'].iloc[0] if 'ann_date' in df_mainbz_list.columns and not df_mainbz_list.empty else "N/A"
+        report_end_date = df_mainbz_list['end_date'].iloc[0] if 'end_date' in df_mainbz_list.columns and not df_mainbz_list.empty else period
+        
+        results = [f"--- {stock_name} ({ts_code}) 主营业务构成 ({report_end_date}, 类型: {type_param}, 公告: {latest_ann_date}) ---"]
+        
+        # Tushare's fina_mainbz is typically sorted by bz_sales desc by default.
+        # We just need to limit the number of records.
+        actual_items_to_show = df_mainbz_list.head(limit_param)
+
+        for _, row in actual_items_to_show.iterrows():
+            item_parts = [f"业务项目: {row.get('bz_item', 'N/A')}"]
+            
+            def format_bz_value(key, label, unit="亿元"):
+                if key in row and pd.notna(row[key]):
+                    value = row[key]
+                    try:
+                        numeric_value = pd.to_numeric(value)
+                        if unit == "亿元": # bz_sales, bz_profit, bz_cost are in Yuan
+                            return f"{label}: {numeric_value / 100000000:.4f} {unit}"
+                        else:
+                            return f"{label}: {numeric_value}"
+                    except (ValueError, TypeError):
+                        return f"{label}: (值非数字: {value})"
+                return f"{label}: 未提供"
+
+            item_parts.append(format_bz_value('bz_sales', '营业收入'))
+            item_parts.append(format_bz_value('bz_profit', '营业利润'))
+            item_parts.append(format_bz_value('bz_cost', '营业成本'))
+            item_parts.append(f"币种: {row.get('curr_type', 'N/A')}")
+            results.append("\n".join(item_parts))
+            results.append("-" * 20)
+            
+        if len(df_mainbz_list) > limit_param:
+            results.append(f"注意: 主营业务项目超过 {limit_param} 条，仅显示主要项目。")
+
+        return "\n".join(results)
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_fina_mainbz for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取主营业务构成失败: {str(e)}"
+
+@mcp.tool()
+def get_fina_audit(ts_code: str, period: str) -> str:
+    """
+    获取上市公司指定报告期的财务审计意见。
+
+    参数:
+        ts_code: 股票代码 (例如: 000001.SZ)
+        period: 报告期 (YYYYMMDD格式, 例如: 20231231)
+    """
+    debug_params = f"ts_code='{ts_code}', period='{period}'"
+    print(f"DEBUG: Tool get_fina_audit called with {debug_params}.", file=sys.stderr, flush=True)
+
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not ts_code or not period:
+        return "错误: 股票代码 (ts_code) 和报告期 (period) 是必需的。"
+    if not (len(period) == 8 and period.isdigit()):
+        return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
+        
+    try:
+        pro = ts.pro_api()
+        stock_name = _get_stock_name(pro, ts_code)
+        
+        # Fields from Tushare: ts_code, ann_date, end_date, audit_result, audit_fees, audit_agency, audit_sign
+        req_fields = 'ts_code,ann_date,end_date,audit_result,audit_fees,audit_agency,audit_sign'
+        
+        api_params = {
+            'ts_code': ts_code,
+            'period': period, # Tushare API for fina_audit takes 'period'
+            'fields': req_fields
+        }
+        
+        df_audit_latest = _fetch_latest_report_data(
+            pro.fina_audit,
+            result_period_field_name='end_date', # 'end_date' in fina_audit output is the report period
+            result_period_value=period,
+            is_list_result=False, # We expect one audit opinion for the period's latest announcement
+            **api_params
+        )
+
+        if df_audit_latest is None or df_audit_latest.empty:
+            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} 的财务审计意见数据。"
+
+        audit_data = df_audit_latest.iloc[0]
+        
+        report_end_date = audit_data.get('end_date', period)
+        ann_date = audit_data.get('ann_date', 'N/A')
+        
+        results = [f"--- {stock_name} ({ts_code}) 财务审计意见 ({report_end_date}, 公告: {ann_date}) ---"]
+        
+        results.append(f"审计结果: {audit_data.get('audit_result', '未提供')}")
+        
+        audit_fees_raw = audit_data.get('audit_fees')
+        if pd.notna(audit_fees_raw):
+            try:
+                audit_fees_yuan = pd.to_numeric(audit_fees_raw)
+                # audit_fees in Tushare are in Yuan. Convert to 100 million Yuan.
+                results.append(f"审计费用: {audit_fees_yuan / 100000000:.4f} 亿元")
+            except (ValueError, TypeError):
+                results.append(f"审计费用: (值非数字: {audit_fees_raw})")
+        else:
+            results.append("审计费用: 未提供")
+            
+        results.append(f"会计事务所: {audit_data.get('audit_agency', '未提供')}")
+        results.append(f"签字会计师: {audit_data.get('audit_sign', '未提供')}")
+        
+        return "\n".join(results)
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_fina_audit for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取财务审计意见失败: {str(e)}"
+
+@mcp.tool()
+def get_top_list_detail(trade_date: str, ts_code: Optional[str] = None) -> str:
+    """
+    获取龙虎榜每日交易明细。
+
+    参数:
+        trade_date: 交易日期 (YYYYMMDD格式, 必填)
+        ts_code: 股票代码 (可选, 例如: 000001.SZ)
+    """
+    debug_params = f"trade_date='{trade_date}', ts_code='{ts_code}'"
+    print(f"DEBUG: Tool get_top_list_detail called with {debug_params}.", file=sys.stderr, flush=True)
+
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not trade_date or not (len(trade_date) == 8 and trade_date.isdigit()):
+        return "错误：请提供有效的 'trade_date' 参数 (YYYYMMDD格式)。"
+
+    try:
+        pro = ts.pro_api()
+        
+        api_params = {'trade_date': trade_date}
+        if ts_code:
+            api_params['ts_code'] = ts_code
+        
+        # Define the fields to request, ensuring all described fields are included.
+        # Tushare's default for top_list usually includes most of these, but explicitly listing them is safer.
+        req_fields = (
+            'trade_date,ts_code,name,close,pct_change,turnover_rate,amount,'
+            'l_sell,l_buy,l_amount,net_amount,net_rate,amount_rate,float_values,reason'
+        )
+        api_params['fields'] = req_fields
+
+        df_top_list = pro.top_list(**api_params)
+
+        if df_top_list.empty:
+            stock_info = f"股票 {ts_code} " if ts_code else ""
+            return f"未找到 {stock_info}在 {trade_date} 的龙虎榜数据。"
+
+        results = [f"--- {trade_date} 龙虎榜每日明细 ---"]
+        if ts_code:
+            stock_name = df_top_list['name'].iloc[0] if not df_top_list.empty and 'name' in df_top_list.columns else ts_code
+            results = [f"--- {stock_name} ({ts_code}) {trade_date} 龙虎榜明细 ---"]
+
+
+        for _, row in df_top_list.iterrows():
+            item_details = [
+                f"股票名称: {row.get('name', 'N/A')} ({row.get('ts_code', 'N/A')})",
+                f"交易日期: {row.get('trade_date', 'N/A')}",
+                f"收盘价: {row.get('close', 'N/A'):.2f}" if pd.notna(row.get('close')) else "收盘价: N/A",
+                f"涨跌幅: {row.get('pct_change', 'N/A'):.2f}%" if pd.notna(row.get('pct_change')) else "涨跌幅: N/A",
+                f"换手率: {row.get('turnover_rate', 'N/A'):.2f}%" if pd.notna(row.get('turnover_rate')) else "换手率: N/A",
+                f"总成交额: {row.get('amount', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('amount')) else "总成交额: N/A",
+                f"龙虎榜卖出额: {row.get('l_sell', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('l_sell')) else "龙虎榜卖出额: N/A",
+                f"龙虎榜买入额: {row.get('l_buy', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('l_buy')) else "龙虎榜买入额: N/A",
+                f"龙虎榜成交额: {row.get('l_amount', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('l_amount')) else "龙虎榜成交额: N/A",
+                f"龙虎榜净买入额: {row.get('net_amount', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('net_amount')) else "龙虎榜净买入额: N/A",
+                f"龙虎榜净买额占比: {row.get('net_rate', 'N/A'):.2f}%" if pd.notna(row.get('net_rate')) else "龙虎榜净买额占比: N/A",
+                f"龙虎榜成交额占比: {row.get('amount_rate', 'N/A'):.2f}%" if pd.notna(row.get('amount_rate')) else "龙虎榜成交额占比: N/A",
+                f"当日流通市值: {row.get('float_values', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('float_values')) else "当日流通市值: N/A",
+                f"上榜理由: {row.get('reason', 'N/A')}"
+            ]
+            results.append("\n".join(item_details))
+            results.append("------------------------")
+        
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_top_list_detail for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取龙虎榜数据失败：{str(e)}"
+
+@mcp.tool()
+def get_top_institution_detail(trade_date: str, ts_code: Optional[str] = None) -> str:
+    """
+    获取龙虎榜机构成交明细。
+
+    参数:
+        trade_date: 交易日期 (YYYYMMDD格式, 必填)
+        ts_code: 股票代码 (可选, 例如: 000001.SZ)
+    """
+    debug_params = f"trade_date='{trade_date}', ts_code='{ts_code}'"
+    print(f"DEBUG: Tool get_top_institution_detail called with {debug_params}.", file=sys.stderr, flush=True)
+
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not trade_date or not (len(trade_date) == 8 and trade_date.isdigit()):
+        return "错误：请提供有效的 'trade_date' 参数 (YYYYMMDD格式)。"
+
+    try:
+        pro = ts.pro_api()
+        
+        api_params = {'trade_date': trade_date}
+        if ts_code:
+            api_params['ts_code'] = ts_code
+        
+        # Explicitly request all fields mentioned in the documentation
+        req_fields = (
+            'trade_date,ts_code,exalter,side,buy,buy_rate,sell,sell_rate,net_buy,reason'
+        )
+        api_params['fields'] = req_fields
+
+        df_top_inst = pro.top_inst(**api_params)
+
+        if df_top_inst.empty:
+            stock_info = f"股票 {ts_code} " if ts_code else ""
+            return f"未找到 {stock_info}在 {trade_date} 的龙虎榜机构成交明细数据。"
+
+        results = [f"--- {trade_date} 龙虎榜机构成交明细 ---"]
+        if ts_code:
+            # Attempt to get stock name for a more descriptive title if ts_code is provided
+            # Note: top_inst itself doesn't return 'name', so we'd need an extra call or rely on user knowing the ts_code.
+            # For simplicity, we'll just use the ts_code in the title here.
+            results = [f"--- 股票 {ts_code} 在 {trade_date} 的龙虎榜机构成交明细 ---"]
+        
+        # Sort by 'exalter' (营业部) then 'side' to group related entries, if multiple entries exist.
+        # Tushare might already sort, but explicit sorting adds robustness.
+        df_top_inst_sorted = df_top_inst.sort_values(by=['exalter', 'side'])
+
+
+        for _, row in df_top_inst_sorted.iterrows():
+            side_desc_map = {
+                '0': "买入金额最大的前5名",
+                '1': "卖出金额最大的前5名"
+            }
+            side_raw = row.get('side')
+            side_description = side_desc_map.get(str(side_raw), f"未知类型 ({side_raw})") if pd.notna(side_raw) else "类型未知"
+
+            item_details = [
+                f"交易日期: {row.get('trade_date', 'N/A')}",
+                f"TS代码: {row.get('ts_code', 'N/A')}",
+                f"营业部名称: {row.get('exalter', 'N/A')}",
+                f"买卖类型: {side_description}",
+                f"买入额: {row.get('buy', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('buy')) else "买入额: N/A",
+                f"买入占总成交比例: {row.get('buy_rate', 'N/A'):.2f}%" if pd.notna(row.get('buy_rate')) else "买入占总成交比例: N/A",
+                f"卖出额: {row.get('sell', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('sell')) else "卖出额: N/A",
+                f"卖出占总成交比例: {row.get('sell_rate', 'N/A'):.2f}%" if pd.notna(row.get('sell_rate')) else "卖出占总成交比例: N/A",
+                f"净买入额: {row.get('net_buy', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('net_buy')) else "净买入额: N/A",
+                f"上榜理由: {row.get('reason', 'N/A')}"
+            ]
+            results.append("\n".join(item_details))
+            results.append("------------------------")
+        
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_top_institution_detail for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取龙虎榜机构明细失败：{str(e)}"
+
 # --- Start of MCP SSE Workaround Integration ---
 # Remove previous mounting attempt:
 # # Mount the FastMCP SSE application.
