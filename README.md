@@ -1,48 +1,136 @@
-# Tushare MCP Server
-
-<div align="center">
-
-基于 Model Context Protocol (MCP) 的智能股票数据助手
+# <Tushare_MCP>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 
-</div>
+<该项目基于zhewenzhang（OJO）的开源项目 tushare_MCP 进行了优化。原本是想校验金融资讯中的数据是否准确，后续认为能做为一个 MCP 提供服务>
 
-## 🚀 核心功能
+## ✨ 主要特性
 
-### 1. 股票基础信息查询
-- 支持通过股票代码（如：000001.SZ）精确查询
-- 支持通过股票名称（如：平安银行）模糊查询
-- 返回信息包含：
-  - 股票代码和名称
-  - 所属行业和地区
-  - 上市日期
-  - 市场类型
-  - 交易状态
+*   **全面的股票数据查询：**
+    *   提供股票基本信息、实时行情（日线、指标）、历史股价变动查询。
+    *   支持通过股票代码或名称进行智能搜索。
+*   **深度财务数据分析：**
+    *   获取上市公司详细财务报表，包括利润表、资产负债表、现金流量表。
+    *   查询关键财务指标数据。
+*   **指数与市场数据覆盖：**
+    *   支持主流指数的基本信息查询、成分股获取及全球指数行情。
+*   **股东及公司基本面信息：**
+    *   查询股东户数、十大股东信息、每日股本市值以及股权质押明细。
+*   **安全的 Token 管理与便捷的 API 访问：**
+    *   提供安全的 Tushare Token 配置与状态检查机制。
+    *   通过 FastAPI 封装，提供标准化的 HTTP API 接口，方便与其他应用集成。
+*   **MCP 协议兼容：**
+    *   保持与 MCP 协议的兼容性，支持与特定 AI 助手平台的集成。
+*   继承自原版 `tushare_MCP` 的核心工具交互逻辑（见下方致谢）。
 
-### 2. 智能股票搜索
-- 支持模糊关键词搜索
-- 同时匹配股票代码和名称
-- 支持行业关键词搜索（如："新能源"、"科技"）
-- 返回匹配度最高的股票列表
+## 🚀 快速开始
 
-### 3. 财务报表分析
-- 支持查询上市公司利润表数据
-- 灵活的时间范围查询（年报、季报、半年报）
-- 多种报表类型支持（合并报表、母公司报表等）
-- 主要指标一目了然：
-  - 每股收益
-  - 营业收入和成本
-  - 期间费用
-  - 利润指标
-- 支持历史数据对比分析
+### 环境要求
 
-### 4. 安全的Token管理
-- 交互式Token配置流程
-- 本地安全存储（加密保存）
-- Token有效性自动验证
-- 定期Token状态检查
+*   Python 3.8+
+*   有效的 Tushare Pro 账号和 API Token (获取地址: [Tushare Pro Token 申请页面](https://tushare.pro/user/token)，请自行注册)
+
+### 安装步骤
+
+1.  **克隆仓库：**
+    ```bash
+    git clone <你的 GitHub 仓库 HTTPS 或 SSH链接>
+    cd <你的项目目录名>
+    ```
+
+2.  **创建并激活虚拟环境 (推荐)：**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # Linux/macOS
+    # venv\Scripts\activate   # Windows
+    ```
+
+3.  **安装依赖：**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+### 配置 Tushare Token
+
+本项目需要 Tushare API Token 才能正常工作。你有以下几种方式配置 Token：
+
+1.  **通过 `.env` 文件 (推荐，安全)：**
+    *   在项目根目录下创建一个名为 `.env` 的文件 (此文件已被 `.gitignore` 忽略，不会提交到版本库)。
+    *   在 `.env` 文件中添加以下内容，并将 `<你的TUSHARE_TOKEN>` 替换为你的真实 Token：
+        ```
+        TUSHARE_TOKEN=<你的TUSHARE_TOKEN>
+        ```
+2.  **通过环境变量：**
+    在运行 `server.py` 之前，设置名为 `TUSHARE_TOKEN` 的环境变量。
+    ```bash
+    export TUSHARE_TOKEN="<你的TUSHARE_TOKEN>" # Linux/macOS
+    # set TUSHARE_TOKEN="<你的TUSHARE_TOKEN>"   # Windows (cmd)
+    # $env:TUSHARE_TOKEN="<你的TUSHARE_TOKEN>" # Windows (PowerShell)
+    ```
+
+### 启动服务
+
+```bash
+python server.py
+```
+服务将在 `<默认端口号，例如：8000，或根据你的 server.py 实际情况填写>` 启动。
+
+## 📖 使用示例 (API 端点)
+
+<这里详细列出你的项目提供的 API 端点、请求方法、参数以及示例响应。如果与原版 tushare_MCP 的 API 有变化，务必清晰说明。>
+
+### 示例 1: 获取股票基本信息
+```
+GET /stock_basic?ts_code=000001.SZ
+```
+或
+```
+GET /stock_basic?name=平安银行
+```
+
+### 示例 2: <你修改或新增的 API 功能>
+```
+<请求方法> <端点路径>?<参数>
+```
+
+<...>
+
+## 🐳 Docker 支持 (可选)
+
+如果你的项目支持 Docker (看起来是的，因为有 `Dockerfile`)：
+```bash
+# 构建 Docker 镜像
+docker build -t <你的镜像名> .
+
+# 运行 Docker 容器 (记得传递 TUSHARE_TOKEN)
+docker run -e TUSHARE_TOKEN="<你的TUSHARE_TOKEN>" -p <主机端口>:<容器端口> <你的镜像名>
+```
+
+## 🛠️ 与 MCP 平台集成 (smithery.yaml)
+
+项目包含 `smithery.yaml` 文件，用于与支持模型上下文协议 (MCP) 的平台（例如 Claude 的早期工具使用方式）集成。它定义了项目的构建和启动配置，依赖于 `TUSHARE_TOKEN` 环境变量的设置。
+
+## 🤝 贡献指南
+
+<如果你希望他人贡献，可以添加此部分。>
+欢迎提交 Issues 和 Pull Requests！在提交代码前，请确保：
+*   代码遵循 PEP8 规范。
+*   添加了必要的测试。
+*   更新了相关文档。
+
+## ❤️ 致谢 (Acknowledgements)
+
+本项目基于 [zhewenzhang/tushare_MCP](https://github.com/zhewenzhang/tushare_MCP) 项目进行了修改和扩展。非常感谢原作者的开源贡献！
+
+原项目核心功能包括：
+*   股票基础信息查询
+*   智能股票搜索
+*   财务报表分析 (部分继承或修改)
+*   安全的Token管理 (部分继承或修改)
+
+## 📄 开源许可证 (License)
+
+本项目采用 **MIT License**。详情请见 [LICENSE](LICENSE) 文件。
 
 ## 🎯 使用场景
 
@@ -169,3 +257,23 @@ Python 环境是由操作系统或外部工具（比如 Homebrew）管理的。�
 
    python3 -m venv venv
    source venv/bin/activate
+
+
+## cloudflare 服务说明
+cloudflared 安装命令：
+brew install cloudflared && 
+sudo cloudflared service install eyJhIjoiNmQ0YzM1ODQ2ZTQxMzliYTU3NDUzYWRiZWEyOWVmOTkiLCJ0IjoiNjA5NTY4MjQtM2JiZS00ODNiLWEyM2EtZDZmMjE3M2IyZTI1IiwicyI6Ill6UXdNV1k0WmprdE5qSTFOUzAwWmpBeUxXSXpZMkl0Wm1RME5HSTFOekl5WXpkaiJ9
+
+tunnels 启用命令：
+sudo cloudflared service install eyJhIjoiNmQ0YzM1ODQ2ZTQxMzliYTU3NDUzYWRiZWEyOWVmOTkiLCJ0IjoiNjA5NTY4MjQtM2JiZS00ODNiLWEyM2EtZDZmMjE3M2IyZTI1IiwicyI6Ill6UXdNV1k0WmprdE5qSTFOUzAwWmpBeUxXSXpZMkl0Wm1RME5HSTFOekl5WXpkaiJ9
+
+tunnels 卸载命令：
+sudo cloudflared service uninstall
+
+## 新增 mcp 工具后需要重启持久化服务
+
+停止服务：
+launchctl unload ~/Library/LaunchAgents/com.nakocai.tushare-mcp-api.plist
+
+启动服务：
+launchctl load ~/Library/LaunchAgents/com.nakocai.tushare-mcp-api.plist

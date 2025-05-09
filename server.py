@@ -11,6 +11,17 @@ import traceback
 from mcp.server.fastmcp import FastMCP
 import os
 
+from fastapi import FastAPI, HTTPException, Body # Added HTTPException, Body
+import uvicorn # New import
+
+# fastapi.staticfiles is not used, so I won't import it here.
+# If FastMCP is not directly mountable as an ASGI app, this approach will need adjustment
+# based on FastMCP's specific API for integration.
+
+# Added for the workaround:
+from starlette.requests import Request
+from mcp.server.sse import SseServerTransport
+
 print("DEBUG: debug_server.py starting...", file=sys.stderr, flush=True)
 
 # --- Start of ENV_FILE and Helper Functions ---
@@ -110,6 +121,44 @@ except Exception as e:
     traceback.print_exc(file=sys.stderr)
     raise
 # --- End of MCP Instance Creation ---
+
+# --- FastAPI App Creation and Basic Endpoint ---
+app = FastAPI(
+    title="Tushare MCP API",
+    description="Remote API for Tushare MCP tools via FastAPI.",
+    version="0.0.1"
+)
+
+@app.get("/")
+async def read_root():
+    return {"message": "Hello World - Tushare MCP API is running!"}
+
+# New API endpoint for setting up Tushare token
+@app.post("/tools/setup_tushare_token", summary="Setup Tushare API token")
+async def api_setup_tushare_token(payload: dict = Body(...)):
+    """
+    Sets the Tushare API token.
+    Expects a JSON payload with a "token" key.
+    Example: {"token": "your_actual_token_here"}
+    """
+    print(f"DEBUG: API /tools/setup_tushare_token called with payload: {{payload}}", file=sys.stderr, flush=True)
+    token = payload.get("token")
+    if not token or not isinstance(token, str):
+        print(f"DEBUG: API /tools/setup_tushare_token - Missing or invalid token in payload.", file=sys.stderr, flush=True)
+        raise HTTPException(status_code=400, detail="Missing or invalid 'token' in payload. Expected a JSON object with a 'token' string.")
+
+    try:
+        # Call your original tool function
+        original_tool_function_output = setup_tushare_token(token=token) # This is your original @mcp.tool() function
+        print(f"DEBUG: API /tools/setup_tushare_token - Original tool output: {{original_tool_function_output}}", file=sys.stderr, flush=True)
+        return {"status": "success", "message": original_tool_function_output}
+    except Exception as e:
+        error_message = f"Error setting up token via API: {str(e)}"
+        print(f"DEBUG: ERROR in api_setup_tushare_token: {{error_message}}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr) # Keep detailed server-side logs
+        raise HTTPException(status_code=500, detail=error_message)
+
+# --- End of FastAPI App Creation ---
 
 # --- Start of Core Token Management Functions (to be kept) ---
 def init_env_file():
@@ -249,6 +298,146 @@ def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
         return f"查询失败：{str(e)}"
 
 @mcp.tool()
+def search_index(index_name: str, market: str = None, publisher: str = None, category: str = None) -> str:
+    """
+    根据指数名称搜索指数的基本信息，用于查找指数的TS代码。
+
+    参数:
+        index_name: 指数简称或包含在全称中的关键词 (例如: "沪深300", "A50")
+        market: 交易所或服务商代码 (可选, 例如: CSI, SSE, SZSE, MSCI, OTH)
+        publisher: 发布商 (可选, 例如: "中证公司", "申万", "MSCI")
+        category: 指数类别 (可选, 例如: "规模指数", "行业指数")
+    """
+    print(f"DEBUG: Tool search_index called with name: '{index_name}', market: '{market}', publisher: '{publisher}', category: '{category}'.", file=sys.stderr, flush=True)
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not index_name:
+        return "错误: 指数名称 (index_name) 是必需参数。"
+
+    try:
+        pro = ts.pro_api()
+        query_params = {
+            'name': index_name,
+            'fields': 'ts_code,name,fullname,market,publisher,category,list_date'
+        }
+        if market:
+            query_params['market'] = market
+        if publisher:
+            query_params['publisher'] = publisher
+        if category:
+            query_params['category'] = category
+        
+        # The 'name' parameter in index_basic acts as a keyword search against 'name' and 'fullname'
+        # No need for complex df filtering if API handles keyword search well.
+        df = pro.index_basic(**query_params)
+
+        if df.empty:
+            return f"未找到与 '{index_name}'相关的指数。尝试更通用或精确的关键词，或检查市场/发布商/类别参数。"
+
+        results = [f"--- 指数搜索结果 for '{index_name}' ---"]
+        # Limit results to avoid overly long output, e.g., top 20 matches
+        # Sort by list_date (desc) and then ts_code to have some order if many results
+        df_sorted = df.sort_values(by=['list_date', 'ts_code'], ascending=[False, True]).head(20)
+
+        for _, row in df_sorted.iterrows():
+            info_parts = [
+                f"TS代码: {row.get('ts_code', 'N/A')}",
+                f"简称: {row.get('name', 'N/A')}",
+                f"全称: {row.get('fullname', 'N/A')}",
+                f"市场: {row.get('market', 'N/A')}",
+                f"发布方: {row.get('publisher', 'N/A')}",
+                f"类别: {row.get('category', 'N/A')}",
+                f"发布日期: {row.get('list_date', 'N/A')}"
+            ]
+            results.append("\n".join(info_parts))
+            results.append("------------------------")
+        
+        if len(df) > 20:
+            results.append(f"注意: 结果超过20条，仅显示前20条。请尝试使用 market, publisher 或 category 参数缩小范围。")
+
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in search_index for '{index_name}': {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"搜索指数 '{index_name}' 失败: {str(e)}"
+
+@mcp.tool()
+def get_index_list(ts_code: str = None, name: str = None, market: str = None, publisher: str = None, category: str = None) -> str:
+    """
+    获取指数基础信息列表。可以根据一个或多个条件进行筛选。
+    例如，仅提供 market='CSI' 可以列出中证指数相关指数。
+
+    参数:
+        ts_code: 指数代码 (可选, 例如: 000300.SH)
+        name: 指数简称或包含在全称中的关键词 (可选, 例如: "沪深300", "A50")
+        market: 交易所或服务商代码 (可选, 例如: CSI, SSE, SZSE, MSCI, OTH)
+        publisher: 发布商 (可选, 例如: "中证公司", "申万", "MSCI")
+        category: 指数类别 (可选, 例如: "规模指数", "行业指数")
+    """
+    print(f"DEBUG: Tool get_index_list called with ts_code: '{ts_code}', name: '{name}', market: '{market}', publisher: '{publisher}', category: '{category}'.", file=sys.stderr, flush=True)
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+
+    if not any([ts_code, name, market, publisher, category]):
+        return "错误: 请至少提供一个查询参数 (ts_code, name, market, publisher, or category)。"
+
+    try:
+        pro = ts.pro_api()
+        query_params = {}
+        if ts_code:
+            query_params['ts_code'] = ts_code
+        if name:
+            query_params['name'] = name
+        if market:
+            query_params['market'] = market
+        if publisher:
+            query_params['publisher'] = publisher
+        if category:
+            query_params['category'] = category
+        
+        query_params['fields'] = 'ts_code,name,fullname,market,publisher,category,list_date,base_date,base_point,weight_rule,desc,exp_date'
+        
+        df = pro.index_basic(**query_params)
+
+        if df.empty:
+            return f"未找到符合指定条件的指数。"
+
+        results = [f"--- 指数列表查询结果 ---"]
+        # Limit results to avoid overly long output, e.g., top 30 matches
+        # Sort by list_date (desc) and then ts_code to have some order if many results
+        df_sorted = df.sort_values(by=['market', 'list_date', 'ts_code'], ascending=[True, False, True]).head(30)
+
+        for _, row in df_sorted.iterrows():
+            info_parts = [
+                f"TS代码: {row.get('ts_code', 'N/A')}",
+                f"简称: {row.get('name', 'N/A')}",
+                f"全称: {row.get('fullname', 'N/A')}",
+                f"市场: {row.get('market', 'N/A')}",
+                f"发布方: {row.get('publisher', 'N/A')}",
+                f"类别: {row.get('category', 'N/A')}",
+                f"发布日期: {row.get('list_date', 'N/A')}",
+                f"基期: {row.get('base_date', 'N/A')}",
+                f"基点: {row.get('base_point', 'N/A')}",
+                f"加权方式: {row.get('weight_rule', 'N/A')}",
+                # f"描述: {row.get('desc', 'N/A')}", # Description can be very long
+                f"终止日期: {row.get('exp_date', 'N/A') if pd.notna(row.get('exp_date')) else 'N/A'}"
+            ]
+            results.append("\n".join(info_parts))
+            results.append("------------------------")
+        
+        if len(df) > 30:
+            results.append(f"注意: 结果超过30条，仅显示前30条（按市场、发布日期排序）。请提供更精确的查询参数以缩小范围。")
+
+        return "\n".join(results)
+
+    except Exception as e:
+        error_msg_detail = f"ts_code={ts_code}, name={name}, market={market}, publisher={publisher}, category={category}"
+        print(f"DEBUG: ERROR in get_index_list for {error_msg_detail}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取指数列表失败: {str(e)}"
+
+@mcp.tool()
 def search_stocks(keyword: str) -> str:
     """
     搜索股票
@@ -381,60 +570,133 @@ def get_daily_prices(ts_code: str, trade_date: str) -> str:
         return f"获取每日价格数据失败：{str(e)}"
 
 @mcp.tool()
-def get_financial_indicator(ts_code: str, period: str) -> str:
+def get_financial_indicator(
+    ts_code: str, 
+    period: str = None, 
+    ann_date: str = None, 
+    start_date: str = None, 
+    end_date: str = None,
+    limit: int = 10 # Max number of reports to return if multiple are found
+) -> str:
     """
-    获取指定股票在特定报告期的主要财务指标。
+    获取A股上市公司历史财务指标数据。
+    可以按报告期(period)、公告日期(ann_date)或公告日期范围(start_date, end_date)进行查询。
+    必须提供 ts_code。
+    必须提供以下条件之一：
+    1. period (报告期)
+    2. ann_date (公告日期)
+    3. start_date 和 end_date (公告日期范围)
+    返回匹配条件的所有财务报告期数据 (按报告期、公告日降序排列，最多显示 limit 条记录)。
 
     参数:
         ts_code: 股票代码 (例如: 600348.SH)
-        period: 报告期 (YYYYMMDD格式, 例如: 20240930 代表 2024年三季报)
+        period: 报告期 (可选, YYYYMMDD格式, 例如: 20231231 代表年报)
+        ann_date: 公告日期 (可选, YYYYMMDD格式)
+        start_date: 公告开始日期 (可选, YYYYMMDD格式, 与end_date一同使用)
+        end_date: 公告结束日期 (可选, YYYYMMDD格式, 与start_date一同使用)
+        limit: 返回记录的条数上限 (默认为10)
     """
-    print(f"DEBUG: Tool get_financial_indicator called with ts_code: '{ts_code}', period: '{period}'.", file=sys.stderr, flush=True)
+    debug_params = f"ts_code='{ts_code}', period='{period}', ann_date='{ann_date}', start_date='{start_date}', end_date='{end_date}', limit={limit}"
+    print(f"DEBUG: Tool get_financial_indicator (enhanced) called with {debug_params}.", file=sys.stderr, flush=True)
+
     if not get_tushare_token():
         return "请先配置Tushare token"
+    if not ts_code:
+        return "错误: 股票代码 (ts_code) 是必需的。"
+
+    if not (period or ann_date or (start_date and end_date)):
+        return "错误: 请至少提供 period, ann_date, 或 start_date 与 end_date 组合中的一组参数。"
+    if (start_date and not end_date) or (not start_date and end_date):
+        return "错误: start_date 和 end_date 必须同时提供。"
+
     try:
         pro = ts.pro_api()
         stock_name = _get_stock_name(pro, ts_code)
-        req_fields = 'ts_code,ann_date,end_date,grossprofit_margin,netprofit_margin,roe_yearly,roe_waa,roe_dt,n_income_attr_p,total_revenue,rd_exp,n_income_attr_p_yoy,dtprofit_yoy,tr_yoy,or_yoy,bps'
-        df = pro.fina_indicator(ts_code=ts_code, period=period, fields=req_fields)
+        
+        api_params = {'ts_code': ts_code}
+        if period:
+            api_params['period'] = period
+        if ann_date:
+            api_params['ann_date'] = ann_date
+        if start_date and end_date: # ann_date range
+            api_params['start_date'] = start_date
+            api_params['end_date'] = end_date
+
+        # Enhanced list of fields including debt_to_assets
+        req_fields = (
+            'ts_code,ann_date,end_date,eps,dt_eps,'
+            'grossprofit_margin,netprofit_margin,roe_yearly,roe_waa,roe_dt,'
+            'n_income_attr_p,total_revenue,rd_exp,debt_to_assets,'
+            'n_income_attr_p_yoy,dtprofit_yoy,tr_yoy,or_yoy,bps,ocfps,update_flag'
+        )
+        api_params['fields'] = req_fields
+        
+        df = pro.fina_indicator(**api_params)
+
         if df.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在 {period} 的财务指标数据。请检查代码和报告期是否正确。"
-        indicator_data = df.iloc[0]
-        results = [f"--- {stock_name} ({ts_code}) {period} 财务指标 ---"]
-        def format_indicator(key, label, unit="%"):
-            if key in indicator_data and pd.notna(indicator_data[key]):
-                value = indicator_data[key]
-                try:
-                    numeric_value = pd.to_numeric(value)
-                    if unit == "亿元":
-                        return f"{label}: {numeric_value / 100000000:.4f} {unit}"
-                    elif unit == "元":
-                        return f"{label}: {numeric_value:.4f} {unit}"
-                    elif unit == "%" :
-                        return f"{label}: {numeric_value:.2f}%"
-                    else:
-                        return f"{label}: {numeric_value}"
-                except (ValueError, TypeError):
-                    return f"{label}: (值非数字: {value})"
-            return f"{label}: 未提供"
-        results.append(format_indicator('grossprofit_margin', '销售毛利率'))
-        results.append(format_indicator('netprofit_margin', '销售净利率'))
-        results.append(format_indicator('roe_yearly', '净资产收益率(ROE, 年化)'))
-        results.append(format_indicator('roe_waa', '净资产收益率(ROE, 加权平均)'))
-        results.append(format_indicator('roe_dt', '净资产收益率(ROE, 扣非)'))
-        results.append(format_indicator('n_income_attr_p', '归属母公司净利润', unit='亿元'))
-        results.append(format_indicator('total_revenue', '营业总收入', unit='亿元'))
-        results.append(format_indicator('rd_exp', '研发费用', unit='亿元'))
-        results.append(format_indicator('n_income_attr_p_yoy', '归母净利润同比增长率'))
-        results.append(format_indicator('dtprofit_yoy', '扣非净利润同比增长率'))
-        results.append(format_indicator('tr_yoy', '营业总收入同比增长率'))
-        results.append(format_indicator('or_yoy', '营业收入同比增长率'))
-        results.append(format_indicator('bps', '每股净资产', unit='元'))
-        if len(results) <= 1: 
-            return f"从 {stock_name} ({ts_code}) {period} 的财务指标数据中未能提取到常用指标，可能接口返回字段有变化或数据缺失。检查请求字段：{req_fields}"
-        return "\\n".join(results)
+            return f"未找到 {stock_name} ({ts_code}) 符合指定条件的财务指标数据。"
+
+        # Sort by report end_date first (desc), then by announcement date (desc) to get latest announcements for latest periods
+        df_sorted = df.sort_values(by=['end_date', 'ann_date'], ascending=[False, False])
+        
+        all_results_str = [f"--- {stock_name} ({ts_code}) 历史财务指标 (最多显示 {limit} 条) ---"]
+        
+        actual_limit = min(limit, len(df_sorted))
+        if actual_limit == 0:
+             return f"未找到 {stock_name} ({ts_code}) 符合指定条件的财务指标数据 (排序后为空)。"
+
+        for i in range(actual_limit):
+            indicator_data = df_sorted.iloc[i]
+            current_period_end_date = indicator_data.get('end_date', 'N/A')
+            current_ann_date = indicator_data.get('ann_date', 'N/A')
+            report_header = f"报告期: {current_period_end_date}, 公告日期: {current_ann_date}"
+            results_for_report = [report_header]
+
+            def format_indicator(key, label, unit="%"):
+                if key in indicator_data and pd.notna(indicator_data[key]):
+                    value = indicator_data[key]
+                    try:
+                        numeric_value = pd.to_numeric(value)
+                        if unit == "亿元":
+                            # Tushare fina_indicator amounts are in Yuan, convert to 100 million Yuan
+                            return f"{label}: {numeric_value / 100000000:.4f} {unit}"
+                        elif unit == "元":
+                            return f"{label}: {numeric_value:.4f} {unit}"
+                        elif unit == "%" :
+                            return f"{label}: {numeric_value:.2f}%"
+                        else:
+                            return f"{label}: {numeric_value}"
+                    except (ValueError, TypeError):
+                        return f"{label}: (值非数字: {value})"
+                return f"{label}: 未提供"
+
+            results_for_report.append(format_indicator('eps', '每股收益', unit='元'))
+            results_for_report.append(format_indicator('dt_eps', '扣非每股收益', unit='元'))
+            results_for_report.append(format_indicator('bps', '每股净资产', unit='元'))
+            results_for_report.append(format_indicator('ocfps', '每股经营现金流', unit='元'))
+            results_for_report.append(format_indicator('grossprofit_margin', '销售毛利率'))
+            results_for_report.append(format_indicator('netprofit_margin', '销售净利率'))
+            results_for_report.append(format_indicator('roe_yearly', '年化净资产收益率(ROE)'))
+            results_for_report.append(format_indicator('roe_waa', '加权平均ROE'))
+            results_for_report.append(format_indicator('roe_dt', '扣非加权平均ROE'))
+            results_for_report.append(format_indicator('debt_to_assets', '资产负债率'))
+            results_for_report.append(format_indicator('total_revenue', '营业总收入', unit='亿元'))
+            results_for_report.append(format_indicator('n_income_attr_p', '归属母公司净利润', unit='亿元'))
+            results_for_report.append(format_indicator('rd_exp', '研发费用', unit='亿元'))
+            results_for_report.append(format_indicator('tr_yoy', '营业总收入同比增长率'))
+            results_for_report.append(format_indicator('or_yoy', '营业收入同比增长率')) # Operating Revenue YoY
+            results_for_report.append(format_indicator('n_income_attr_p_yoy', '归母净利润同比增长率'))
+            results_for_report.append(format_indicator('dtprofit_yoy', '扣非净利润同比增长率'))
+            results_for_report.append(f"更新标识: {indicator_data.get('update_flag', 'N/A')}")
+            
+            all_results_str.append("\n".join(results_for_report))
+            if i < actual_limit - 1:
+                 all_results_str.append("------------------------")
+        
+        return "\n".join(all_results_str)
+
     except Exception as e:
-        print(f"DEBUG: ERROR in get_financial_indicator: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_financial_indicator (enhanced) for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取财务指标失败：{str(e)}"
 
@@ -712,6 +974,150 @@ def get_top_holders(ts_code: str, period: str, holder_type: str = 'H') -> str:
         return f"获取{type_desc}失败：{str(e)}"
 
 @mcp.tool()
+def get_index_constituents(index_code: str, start_date: str, end_date: str) -> str:
+    """
+    获取指定指数在给定月份的成分股列表及其权重。
+    Tushare API 指明这是月度数据。为获取特定月份数据，
+    建议 start_date 和 end_date 分别设为目标月份的第一天和最后一天。
+
+    参数:
+        index_code: 指数代码 (例如: 000300.SH, 399300.SZ)
+        start_date: 开始日期 (YYYYMMDD格式, 例如: 20230901)
+        end_date: 结束日期 (YYYYMMDD格式, 例如: 20230930)
+    """
+    print(f"DEBUG: Tool get_index_constituents called for index: '{index_code}', start: '{start_date}', end: '{end_date}'.", file=sys.stderr, flush=True)
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not index_code or not start_date or not end_date:
+        return "错误: index_code, start_date, 和 end_date 都是必需参数。"
+    try:
+        pro = ts.pro_api()
+        
+        index_name = index_code # Default to code
+        try:
+            # Attempt to fetch the index's display name
+            index_basic_df = pro.index_basic(ts_code=index_code, fields='ts_code,name')
+            if not index_basic_df.empty and 'name' in index_basic_df.columns:
+                index_name = index_basic_df.iloc[0]['name']
+        except Exception as e_idx_name:
+            print(f"Warning: Failed to get index name for {index_code}: {e_idx_name}", file=sys.stderr, flush=True)
+
+        # Fetch index weight data
+        # Fields explicitly requested: index_code, con_code (constituent code), trade_date, weight
+        df = pro.index_weight(index_code=index_code, start_date=start_date, end_date=end_date, fields='index_code,con_code,trade_date,weight')
+
+        if df.empty:
+            return f"未找到指数 {index_name} ({index_code}) 在 {start_date} 至 {end_date} 期间的成分股数据。"
+
+        # Assuming trade_date is consistent for the month's data, take from the first row.
+        record_trade_date = df['trade_date'].iloc[0] if 'trade_date' in df.columns and not df.empty else "未知"
+
+        results = [f"--- {index_name} ({index_code}) 成分股及权重 (截至 {record_trade_date}, 查询区间 {start_date}-{end_date}) ---"]
+        
+        # Sort by weight in descending order for better readability
+        df_sorted = df.sort_values(by='weight', ascending=False)
+
+        for _, row in df_sorted.iterrows():
+            con_code = row.get('con_code')
+            weight = row.get('weight')
+            
+            if con_code is None: # Should not happen if API returns valid data
+                continue
+
+            stock_name = _get_stock_name(pro, con_code) # Use existing helper to get stock name
+
+            weight_str = f"{weight:.4f}%" if pd.notna(weight) else "N/A" # Format weight as percentage string
+            results.append(f"成分股: {con_code} ({stock_name}), 权重: {weight_str}")
+        
+        return "\n".join(results)
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_index_constituents for {index_code}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取指数 {index_code} 成分股数据失败：{str(e)}"
+
+@mcp.tool()
+def get_global_index_quotes(ts_code: str, start_date: str = None, end_date: str = None, trade_date: str = None) -> str:
+    """
+    获取国际主要指数在指定日期范围或单个交易日的行情数据。
+
+    参数:
+        ts_code: TS指数代码 (例如: XIN9, HSI)
+        start_date: 开始日期 (YYYYMMDD格式, 例如: 20240101)。如果提供了trade_date，此参数将被忽略。
+        end_date: 结束日期 (YYYYMMDD格式, 例如: 20240131)。如果提供了trade_date，此参数将被忽略。
+        trade_date: 单个交易日期 (YYYYMMDD格式, 例如: 20240115)。如果提供，将只查询该日数据。
+    """
+    print(f"DEBUG: Tool get_global_index_quotes called for ts_code: '{ts_code}', trade_date: '{trade_date}', start_date: '{start_date}', end_date: '{end_date}'.", file=sys.stderr, flush=True)
+    if not get_tushare_token():
+        return "请先配置Tushare token"
+    if not ts_code:
+        return "错误: 指数代码 (ts_code) 是必需参数。"
+    if not trade_date and not (start_date and end_date):
+        return "错误: 请提供 trade_date 或同时提供 start_date 和 end_date。"
+
+    try:
+        pro = ts.pro_api()
+        params = {
+            'ts_code': ts_code,
+            'fields': 'ts_code,trade_date,open,close,high,low,pre_close,change,pct_chg,swing,vol,amount'
+        }
+        if trade_date:
+            params['trade_date'] = trade_date
+        elif start_date and end_date:
+            params['start_date'] = start_date
+            params['end_date'] = end_date
+        
+        df = pro.index_global(**params)
+
+        if df.empty:
+            date_range_str = f"在 {trade_date}" if trade_date else f"在 {start_date} 至 {end_date} 期间"
+            return f"未找到指数 {ts_code} {date_range_str} 的行情数据。"
+
+        # 获取指数中文名用于显示，如果获取失败则用ts_code
+        index_display_name = ts_code
+        try:
+            index_basics = pro.index_basic(ts_code=ts_code)
+            if not index_basics.empty and 'name' in index_basics.columns:
+                index_display_name = index_basics.iloc[0]['name'] + f" ({ts_code})"
+            elif '.FXI' in ts_code or 'XIN9' in ts_code: # Hardcode for common ones if not in index_basic
+                 idx_map = {"XIN9": "富时中国A50", "XIN9.FXI": "富时中国A50"}
+                 index_display_name = idx_map.get(ts_code, ts_code) + f" ({ts_code})"
+
+        except Exception as e_idx_name:
+            print(f"Warning: Failed to get display name for index {ts_code}, using code. Error: {e_idx_name}", file=sys.stderr, flush=True)
+
+        results = [f"--- {index_display_name} 行情数据 ---"]
+        
+        # Sort by trade_date, Tushare usually returns descending, but let's ensure ascending for multi-day reports
+        df_sorted = df.sort_values(by='trade_date', ascending=True)
+
+        for _, row in df_sorted.iterrows():
+            info_parts = [
+                f"交易日期: {row.get('trade_date', 'N/A')}",
+                f"开盘点位: {row.get('open', 'N/A')}",
+                f"收盘点位: {row.get('close', 'N/A')}",
+                f"最高点位: {row.get('high', 'N/A')}",
+                f"最低点位: {row.get('low', 'N/A')}",
+                f"昨收盘点: {row.get('pre_close', 'N/A')}",
+                f"涨跌点位: {row.get('change', 'N/A')}",
+                f"涨跌幅: {row.get('pct_chg', 'N/A'):.2f}%" if pd.notna(row.get('pct_chg')) else "涨跌幅: N/A",
+                f"振幅: {row.get('swing', 'N/A'):.2f}%" if pd.notna(row.get('swing')) else "振幅: N/A",
+            ]
+            # vol 和 amount 对很多国际指数可能为None或NaN，只在有效时显示
+            if pd.notna(row.get('vol')):
+                info_parts.append(f"成交量: {row.get('vol')}")
+            if pd.notna(row.get('amount')):
+                info_parts.append(f"成交额: {row.get('amount')}")
+            results.append("\n".join(info_parts))
+            results.append("------------------------")
+        
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_global_index_quotes for {ts_code}: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取国际指数 {ts_code} 行情数据失败：{str(e)}"
+
+@mcp.tool()
 def get_period_price_change(ts_code: str, start_date: str, end_date: str) -> str:
     """
     计算指定股票在给定日期范围内的股价变动百分比。
@@ -944,18 +1350,77 @@ def get_pledge_detail(ts_code: str) -> str:
         traceback.print_exc(file=sys.stderr)
         return f"获取股权质押明细失败：{str(e)}"
 
+# --- Start of MCP SSE Workaround Integration ---
+# Remove previous mounting attempt:
+# # Mount the FastMCP SSE application.
+# # The sse_app() method returns a Starlette application instance.
+# mcp_sse_app = mcp.sse_app()
+# app.mount("/sse", mcp_sse_app)
+# print("DEBUG: FastMCP SSE app instance mounted at /sse", file=sys.stderr, flush=True)
+
+MCP_BASE_PATH = "/sse" # The path where the MCP service will be available (e.g., https://.../sse)
+
+print(f"DEBUG: Applying MCP SSE workaround for base path: {MCP_BASE_PATH}", file=sys.stderr, flush=True)
+
+try:
+    # 1. Initialize SseServerTransport.
+    # The `messages_endpoint_path` is the path that the client will be told to POST messages to.
+    # This path should be the full path, including our base path.
+    # The SseServerTransport will handle POSTs to this path.
+    messages_full_path = f"{MCP_BASE_PATH}/messages/"
+    sse_transport = SseServerTransport(messages_full_path) # Directly pass the full path string
+    print(f"DEBUG: SseServerTransport initialized; client will be told messages are at: {messages_full_path}", file=sys.stderr, flush=True)
+
+    async def handle_mcp_sse_handshake(request: Request) -> None:
+        """Handles the initial SSE handshake from the client."""
+        print(f"DEBUG: MCP SSE handshake request received for: {request.url}", file=sys.stderr, flush=True)
+        # request._send is a protected member, type: ignore is used.
+        async with sse_transport.connect_sse(
+            request.scope,
+            request.receive,
+            request._send, # type: ignore 
+        ) as (read_stream, write_stream):
+            print(f"DEBUG: MCP SSE connection established for {MCP_BASE_PATH}. Starting McpServer.run.", file=sys.stderr, flush=True)
+            # mcp is our FastMCP instance. _mcp_server is its underlying McpServer.
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(),
+            )
+            print(f"DEBUG: McpServer.run finished for {MCP_BASE_PATH}.", file=sys.stderr, flush=True)
+
+    # 2. Add the route for the SSE handshake.
+    # Clients will make a GET request to this endpoint to initiate the SSE connection.
+    # e.g., GET https://mcp-api.chatbotbzy.top/sse
+    app.add_route(MCP_BASE_PATH, handle_mcp_sse_handshake, methods=["GET"])
+    print(f"DEBUG: MCP SSE handshake GET route added at: {MCP_BASE_PATH}", file=sys.stderr, flush=True)
+
+    # 3. Mount the ASGI app from sse_transport to handle POSTed messages.
+    # This will handle POST requests to https://mcp-api.chatbotbzy.top/sse/messages/
+    app.mount(messages_full_path, sse_transport.handle_post_message)
+    print(f"DEBUG: MCP SSE messages POST endpoint mounted at: {messages_full_path}", file=sys.stderr, flush=True)
+
+    print(f"DEBUG: MCP SSE workaround for base path {MCP_BASE_PATH} applied successfully.", file=sys.stderr, flush=True)
+
+except Exception as e_workaround:
+    print(f"DEBUG: CRITICAL ERROR applying MCP SSE workaround: {str(e_workaround)}", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
+# --- End of MCP SSE Workaround Integration ---
+
 if __name__ == "__main__":
-    print("DEBUG: debug_server.py entering main...", file=sys.stderr, flush=True)
+    print("DEBUG: debug_server.py entering main section for FastAPI...", file=sys.stderr, flush=True)
     try:
-        mcp.run()
-        print("DEBUG: mcp.run() completed (should not happen).", file=sys.stderr, flush=True)
+        # mcp.run() # Commented out original MCP run
+        print("DEBUG: Attempting to start uvicorn server...", file=sys.stderr, flush=True)
+        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+        print("DEBUG: uvicorn.run() completed (should not happen if server runs indefinitely).", file=sys.stderr, flush=True)
     except Exception as e_run:
-        print(f"DEBUG: ERROR during mcp.run(): {e_run}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR during uvicorn.run(): {e_run}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         raise
-    except BaseException as be_run:
-        print(f"DEBUG: BASE EXCEPTION during mcp.run(): {be_run}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        raise
+    except BaseException as be_run: # Catching BaseException like KeyboardInterrupt
+        print(f"DEBUG: BASE EXCEPTION during uvicorn.run() (e.g., KeyboardInterrupt): {be_run}", file=sys.stderr, flush=True)
+        # traceback.print_exc(file=sys.stderr) # Optional: might be too verbose for Ctrl+C
+        # raise # Re-raise if you want the process to exit with an error code from the BaseException
     finally:
         print("DEBUG: debug_server.py finished.", file=sys.stderr, flush=True) 
