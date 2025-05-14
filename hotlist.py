@@ -8,6 +8,9 @@ from mcp.server.fastmcp import FastMCP
 import os
 import traceback
 import uvicorn
+from fastapi import FastAPI
+from starlette.requests import Request
+from mcp.server.sse import SseServerTransport
 
 # --- Start of ENV_FILE and Helper Functions (Copied from server.py or made shared) ---
 # It's better to have a shared utility module for these if you have multiple server files.
@@ -70,6 +73,18 @@ except Exception as e:
     traceback.print_exc(file=sys.stderr)
     raise
 # --- End of MCP Instance Creation ---
+
+# --- FastAPI App Creation (similar to server.py) ---
+app = FastAPI(
+    title="Tushare Hotlist MCP API",
+    description="Remote API for Tushare Hotlist MCP tools via FastAPI.",
+    version="0.0.1" # Or a suitable version
+)
+
+@app.get("/")
+async def read_root():
+    return {"message": "Hello World - Tushare Hotlist MCP API is running!"}
+# --- End of FastAPI App Creation ---
 
 # --- Tool for KPL Concept ---
 @mcp.tool()
@@ -156,15 +171,52 @@ def get_kpl_concept_list(trade_date: Optional[str] = None, ts_code: Optional[str
         return error_msg
 # --- End of Tool ---
 
+# --- Start of MCP SSE Workaround Integration (copied and adapted from server.py) ---
+MCP_BASE_PATH = "/sse" # The path where the MCP service will be available
+
+print(f"DEBUG: hotlist.py: Applying MCP SSE workaround for base path: {MCP_BASE_PATH}", file=sys.stderr, flush=True)
+
+try:
+    messages_full_path = f"{MCP_BASE_PATH}/messages/"
+    sse_transport = SseServerTransport(messages_full_path)
+    print(f"DEBUG: hotlist.py: SseServerTransport initialized; client will be told messages are at: {messages_full_path}", file=sys.stderr, flush=True)
+
+    async def handle_mcp_sse_handshake(request: Request) -> None:
+        print(f"DEBUG: hotlist.py: MCP SSE handshake request received for: {request.url}", file=sys.stderr, flush=True)
+        async with sse_transport.connect_sse(
+            request.scope,
+            request.receive,
+            request._send, # type: ignore 
+        ) as (read_stream, write_stream):
+            print(f"DEBUG: hotlist.py: MCP SSE connection established for {MCP_BASE_PATH}. Starting McpServer.run.", file=sys.stderr, flush=True)
+            # Ensure 'mcp' here refers to the FastMCP instance created in hotlist.py
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(),
+            )
+            print(f"DEBUG: hotlist.py: McpServer.run finished for {MCP_BASE_PATH}.", file=sys.stderr, flush=True)
+
+    app.add_route(MCP_BASE_PATH, handle_mcp_sse_handshake, methods=["GET"])
+    print(f"DEBUG: hotlist.py: MCP SSE handshake GET route added at: {MCP_BASE_PATH}", file=sys.stderr, flush=True)
+
+    app.mount(messages_full_path, sse_transport.handle_post_message)
+    print(f"DEBUG: hotlist.py: MCP SSE messages POST endpoint mounted at: {messages_full_path}", file=sys.stderr, flush=True)
+
+    print(f"DEBUG: hotlist.py: MCP SSE workaround for base path {MCP_BASE_PATH} applied successfully.", file=sys.stderr, flush=True)
+
+except Exception as e_workaround:
+    print(f"DEBUG: hotlist.py: CRITICAL ERROR applying MCP SSE workaround: {str(e_workaround)}", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
+# --- End of MCP SSE Workaround Integration ---
+
 # Placeholder for main execution block if this file is run directly
 if __name__ == "__main__":
     print("DEBUG: hotlist.py entering main section to start Uvicorn server...", file=sys.stderr, flush=True)
-    # The FastMCP instance 'mcp' is already created globally, and tools are registered.
-    # This instance should be a valid ASGI application to be run by Uvicorn.
     try:
-        print("DEBUG: hotlist.py: Starting Uvicorn server for Hotlist MCP on port 8001...", file=sys.stderr, flush=True)
-        # The 'mcp' object (FastMCP instance) is expected to be an ASGI-compatible application.
-        uvicorn.run(mcp, host="0.0.0.0", port=8001, log_level="info")
+        print("DEBUG: hotlist.py: Starting Uvicorn server for Hotlist MCP (FastAPI app) on port 8001...", file=sys.stderr, flush=True)
+        # Run the FastAPI app instance 'app', not 'mcp' directly
+        uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
         print("DEBUG: hotlist.py: Uvicorn server for Hotlist MCP stopped.", file=sys.stderr, flush=True)
     except Exception as e_server:
         print(f"ERROR: hotlist.py: Failed to start or run Uvicorn server: {str(e_server)}", file=sys.stderr, flush=True)
