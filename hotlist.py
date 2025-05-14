@@ -294,6 +294,125 @@ def get_kpl_concept_constituents(
         return error_msg
 # --- End of Tushare KPL Concept Constituents Tool Definition ---
 
+# --- Tushare KPL List (Ranking Data) Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_kpl_list_data",
+    description="获取开盘啦涨停、跌停、炸板、自然涨停、竞价等榜单数据。可按股票代码、交易日期、榜单类型、日期范围筛选。"
+)
+def get_kpl_list_data(
+    trade_date: str = "",
+    ts_code: str = "",
+    tag: str = "", # 例如: "涨停", "跌停", "炸板", "自然涨停", "竞价"
+    start_date: str = "",
+    end_date: str = ""
+) -> str:
+    """
+    获取开盘啦榜单数据。
+
+    参数:
+        trade_date: 交易日期 (YYYYMMDD格式, 例如: 20241014)
+        ts_code: 股票代码 (例如: 000762.SZ)
+        tag: 榜单类型 (例如: "涨停", "跌停", "炸板", "自然涨停", "竞价")
+        start_date: 开始日期 (YYYYMMDD格式)
+        end_date: 结束日期 (YYYYMMDD格式)
+    """
+    print(f"DEBUG: hotlist.py: get_kpl_list_data called with trade_date='{trade_date}', ts_code='{ts_code}', tag='{tag}', start_date='{start_date}', end_date='{end_date}'", file=sys.stderr, flush=True)
+
+    global PRO_API_INSTANCE, PRINTED_TOKEN_ERROR
+    if not PRO_API_INSTANCE:
+        if not PRINTED_TOKEN_ERROR:
+            print("ERROR: hotlist.py: Tushare Pro API (PRO_API_INSTANCE) is not available in get_kpl_list_data.", file=sys.stderr, flush=True)
+        return "错误: Tushare Pro API 未成功初始化。请检查服务日志和Tushare token配置。"
+
+    try:
+        api_params = {}
+        if trade_date:
+            api_params['trade_date'] = trade_date
+        if ts_code:
+            api_params['ts_code'] = ts_code
+        if tag:
+            api_params['tag'] = tag
+        if start_date:
+            api_params['start_date'] = start_date
+        if end_date:
+            api_params['end_date'] = end_date
+        
+        if not api_params:
+            print("DEBUG: hotlist.py: No specific parameters provided to get_kpl_list_data. Tushare API will use its default behavior.", file=sys.stderr, flush=True)
+
+        fields_to_get = 'ts_code,name,trade_date,tag,theme,status,lu_time,ld_time,open_time,last_time,net_change,bid_amount,pct_chg,limit_order,amount,turnover_rate'
+        api_params['fields'] = fields_to_get
+
+        print(f"DEBUG: hotlist.py: Calling PRO_API_INSTANCE.kpl_list with params: {api_params}", file=sys.stderr, flush=True)
+        df = PRO_API_INSTANCE.kpl_list(**api_params)
+
+        if df.empty:
+            query_desc_parts = []
+            if trade_date: query_desc_parts.append(f"trade_date='{trade_date}'")
+            if ts_code: query_desc_parts.append(f"ts_code='{ts_code}'")
+            if tag: query_desc_parts.append(f"tag='{tag}'")
+            if start_date: query_desc_parts.append(f"start_date='{start_date}'")
+            if end_date: query_desc_parts.append(f"end_date='{end_date}'")
+            query_str = ", ".join(query_desc_parts) if query_desc_parts else "无特定查询参数"
+            return f"未找到符合条件的开盘啦榜单数据。查询参数: {query_str}"
+
+        results = [f"--- 开盘啦榜单数据查询结果 ---"]
+        # Create a description of actual parameters used for the query, excluding 'fields'
+        param_strings = [f"{k}='{v}'" for k, v in api_params.items() if k != 'fields' and v]
+        if param_strings:
+             results[0] += f" (查询: {', '.join(param_strings)})"
+        else:
+             results[0] += " (默认查询)"
+
+
+        df_limited = df.head(30) # Limit output
+
+        for _, row in df_limited.iterrows():
+            info_parts = [
+                f"股票: {row.get('ts_code', 'N/A')} ({row.get('name', 'N/A')})",
+                f"交易日期: {row.get('trade_date', 'N/A')}",
+                f"标签: {row.get('tag', 'N/A')}",
+                f"板块: {row.get('theme', 'N/A')}", # theme can be None or empty
+                f"状态: {row.get('status', 'N/A')}",
+                f"涨停时间: {row.get('lu_time', 'N/A')}",
+                f"跌停时间: {row.get('ld_time', 'N/A')}",
+                f"开板时间: {row.get('open_time', 'N/A')}",
+                f"最后涨停: {row.get('last_time', 'N/A')}",
+                f"涨跌幅: {row.get('pct_chg', 'N/A')}%"
+            ]
+            if pd.notna(row.get('net_change')) and row.get('net_change') != '': # Ensure net_change is meaningful
+                info_parts.append(f"主力净额: {row.get('net_change')}")
+            if pd.notna(row.get('amount')) and row.get('amount') != '': # Ensure amount is meaningful
+                info_parts.append(f"成交额: {row.get('amount')}")
+            if pd.notna(row.get('turnover_rate')) and row.get('turnover_rate') != '':
+                 info_parts.append(f"换手率: {row.get('turnover_rate')}%")
+
+
+            results.append("\\n".join(info_parts))
+            results.append("------------------------")
+        
+        if len(df) > len(df_limited):
+            results.append(f"注意: 结果超过 {len(df_limited)} 条，仅显示前 {len(df_limited)} 条。共有 {len(df)} 条数据。")
+
+        return "\\n".join(results)
+
+    except Exception as e:
+        error_msg_detail_parts = []
+        if trade_date: error_msg_detail_parts.append(f"trade_date='{trade_date}'")
+        if ts_code: error_msg_detail_parts.append(f"ts_code='{ts_code}'")
+        if tag: error_msg_detail_parts.append(f"tag='{tag}'")
+        if start_date: error_msg_detail_parts.append(f"start_date='{start_date}'")
+        if end_date: error_msg_detail_parts.append(f"end_date='{end_date}'")
+        error_msg_detail = ", ".join(error_msg_detail_parts) if error_msg_detail_parts else "无特定参数"
+        
+        error_msg = f"获取开盘啦榜单数据失败: {str(e)}. 查询参数: {error_msg_detail}"
+        print(f"DEBUG: hotlist.py: ERROR in get_kpl_list_data: {error_msg}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        if "积分" in str(e) or "credits" in str(e).lower() or "权限" in str(e):
+             return f"获取开盘啦榜单数据失败：Tushare积分不足或无权限访问此接口 (kpl_list 需要至少5000积分)。({str(e)})"
+        return error_msg
+# --- End of Tushare KPL List (Ranking Data) Tool Definition ---
+
 # --- Start of MCP SSE Workaround Integration (copied and adapted from server.py) ---
 MCP_BASE_PATH = "/sse" # The path where the MCP service will be available
 
