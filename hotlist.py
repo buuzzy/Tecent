@@ -8,9 +8,18 @@ from mcp.server.fastmcp import FastMCP
 import os
 import traceback
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from starlette.requests import Request
 from mcp.server.sse import SseServerTransport
+import logging
+
+# --- Setup basic logging ---
+# Configure logger. MCP/FastAPI might have its own logging, so this is a basic setup.
+# You might want to align this with how your other MCP services handle logging.
+logging.basicConfig(stream=sys.stderr, level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__) # Added: logger instance
+# --- End of logging setup ---
 
 # --- Start of ENV_FILE and Helper Functions (Copied from server.py or made shared) ---
 # It's better to have a shared utility module for these if you have multiple server files.
@@ -617,3 +626,133 @@ if __name__ == "__main__":
         if isinstance(e_server, ImportError) and "uvicorn" in str(e_server).lower():
              print("Hint: Ensure 'uvicorn' is installed. You can install it with: pip install uvicorn[standard]", file=sys.stderr, flush=True)
     print("DEBUG: hotlist.py finished main section execution.", file=sys.stderr, flush=True)
+
+# --- 同花顺板块指数列表 Tool Definition ---
+@app.get("/tools/mcp_hotlist_mcp_get_ths_index_list", summary="获取同花顺板块指数列表", deprecated=False)
+async def get_ths_index_list(
+    ts_code: Optional[str] = Query(default="", description="指数代码,例如：885835.TI"),
+    exchange: Optional[str] = Query(default="", description="市场类型 A-a股 HK-港股 US-美股, 例如：A"),
+    type: Optional[str] = Query(default="", description="指数类型 N-概念指数 I-行业指数 R-地域指数 S-同花顺特色指数 ST-同花顺风格指数 TH-同花顺主题指数 BB-同花顺宽基指数, 例如：N")
+):
+    """
+    获取同花顺板块指数列表，包括概念指数、行业指数、地域指数等。
+    数据来源: [Tushare ths_index](https://tushare.pro/document/2?doc_id=259)
+    """
+    if not PRO_API_INSTANCE:
+        logger.error("Tushare Pro API uninitialized.")
+        return {"error": "Tushare Pro API uninitialized. Check token."}
+    try:
+        log_params = f"ts_code='{ts_code}', exchange='{exchange}', type='{type}'"
+        logger.info(f"Calling Tushare API ths_index with params: {log_params}")
+        
+        api_params = {}
+        if ts_code:
+            api_params["ts_code"] = ts_code
+        if exchange:
+            api_params["exchange"] = exchange
+        if type:
+            api_params["type"] = type
+            
+        df = PRO_API_INSTANCE.ths_index(**api_params)
+        
+        if df is None or df.empty:
+            logger.info(f"No data returned from Tushare ths_index for params: {log_params}")
+            return {"results": []} # Return empty list for no data, consistent with other endpoints
+            
+        results = df.to_dict(orient="records")
+        logger.info(f"Successfully retrieved {len(results)} records from ths_index.")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Error calling Tushare ths_index with params {log_params}: {e}", exc_info=True)
+        return {"error": f"Error calling Tushare ths_index: {str(e)}"}
+
+# --- 同花顺概念板块成分 Tool Definition ---
+@app.get("/tools/mcp_hotlist_mcp_get_ths_members", summary="获取同花顺概念板块成分股列表", deprecated=False)
+async def get_ths_members(
+    ts_code: Optional[str] = Query(default="", description="板块指数代码, 例如：885800.TI"),
+    con_code: Optional[str] = Query(default="", description="股票代码, 例如：000001.SZ")
+):
+    """
+    获取同花顺概念板块的成分股列表。
+    数据来源: [Tushare ths_member](https://tushare.pro/document/2?doc_id=261)
+    """
+    if not PRO_API_INSTANCE:
+        logger.error("Tushare Pro API uninitialized.")
+        return {"error": "Tushare Pro API uninitialized. Check token."}
+    
+    if not ts_code:
+        # The API is for getting members of a *specific concept index*.
+        # If ts_code is not provided, it's not clear which concept's members to fetch.
+        # While the Tushare API might accept only con_code (to find which concepts a stock belongs to),
+        # the intent of *this MCP tool endpoint* is to list members for a given concept.
+        logger.warning("ths_member called without ts_code. ts_code is required to list members of a specific concept.")
+        return {"error": "ts_code (板块指数代码) is required to get concept members."}
+
+    log_params = f"ts_code='{ts_code}', con_code='{con_code}'"
+    try:
+        logger.info(f"Calling Tushare API ths_member with params: {log_params}")
+        
+        api_params = {}
+        api_params["ts_code"] = ts_code # ts_code is now effectively mandatory from check above
+        if con_code:
+            api_params["con_code"] = con_code
+            
+        df = PRO_API_INSTANCE.ths_member(**api_params)
+
+        if df is None or df.empty:
+            logger.info(f"No data returned from Tushare ths_member for params: {log_params}")
+            return {"results": []}
+            
+        results = df.to_dict(orient="records")
+        logger.info(f"Successfully retrieved {len(results)} records from ths_member.")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Error calling Tushare ths_member with params {log_params}: {e}", exc_info=True)
+        return {"error": f"Error calling Tushare ths_member: {str(e)}"}
+
+# --- 同花顺板块指数行情 Tool Definition ---
+@app.get("/tools/mcp_hotlist_mcp_get_ths_daily_data", summary="获取同花顺板块指数每日行情数据", deprecated=False)
+async def get_ths_daily_data(
+    ts_code: Optional[str] = Query(default="", description="指数代码, 例如：865001.TI"),
+    trade_date: Optional[str] = Query(default="", description="交易日期 (YYYYMMDD格式), 例如：20230101"),
+    start_date: Optional[str] = Query(default="", description="开始日期 (YYYYMMDD格式), 例如：20230101"),
+    end_date: Optional[str] = Query(default="", description="结束日期 (YYYYMMDD格式), 例如：20230131")
+):
+    """
+    获取同花顺板块指数的每日行情数据。
+    数据来源: [Tushare ths_daily](https://tushare.pro/document/2?doc_id=260)
+    """
+    if not PRO_API_INSTANCE:
+        logger.error("Tushare Pro API uninitialized.")
+        return {"error": "Tushare Pro API uninitialized. Check token."}
+
+    log_params = f"ts_code='{ts_code}', trade_date='{trade_date}', start_date='{start_date}', end_date='{end_date}'"
+        
+    api_params = {}
+    if ts_code:
+        api_params["ts_code"] = ts_code
+    if trade_date:
+        api_params["trade_date"] = trade_date
+    if start_date:
+        api_params["start_date"] = start_date
+    if end_date:
+        api_params["end_date"] = end_date
+
+    if not ts_code and not trade_date and not (start_date and end_date):
+        logger.warning(f"ths_daily called without sufficient filters: {log_params}")
+        return {"error": "Please provide at least a ts_code, or a specific trade_date, or a start_date and end_date for ths_daily_data."}
+    
+    try:
+        logger.info(f"Calling Tushare API ths_daily with params: {log_params}")
+        df = PRO_API_INSTANCE.ths_daily(**api_params)
+
+        if df is None or df.empty:
+            logger.info(f"No data returned from Tushare ths_daily for params: {log_params}")
+            return {"results": []}
+            
+        results = df.to_dict(orient="records")
+        logger.info(f"Successfully retrieved {len(results)} records from ths_daily. Note: Max 3000 rows per call from Tushare.")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Error calling Tushare ths_daily with params {log_params}: {e}", exc_info=True)
+        return {"error": f"Error calling Tushare ths_daily: {str(e)}"}
