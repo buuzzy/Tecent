@@ -86,61 +86,69 @@ async def read_root():
     return {"message": "Hello World - Tushare Hotlist MCP API is running!"}
 # --- End of FastAPI App Creation ---
 
-# --- Tool for KPL Concept ---
-@mcp.tool()
-def get_kpl_concept_list(trade_date: Optional[str] = None, ts_code: Optional[str] = None, name: Optional[str] = None) -> str:
+# --- Tushare KPL Concept Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_kpl_concept_list",
+    description="获取开盘啦概念题材列表。可以根据交易日期、题材代码或题材名称进行筛选。"
+)
+def get_kpl_concept_list(
+    trade_date: str = "",  # Changed from Optional[str] = None
+    ts_code: str = "",     # Changed from Optional[str] = None
+    name: str = ""         # Changed from Optional[str] = None
+) -> str:
     """
     获取开盘啦概念题材列表。
-    可以根据交易日期、题材代码或题材名称进行筛选。
 
     参数:
         trade_date: 交易日期 (YYYYMMDD格式, 例如: 20241014)
         ts_code: 题材代码 (xxxxxx.KP格式, 例如: 000111.KP)
         name: 题材名称 (例如: 化债概念)
     """
-    debug_params = f"trade_date='{trade_date}', ts_code='{ts_code}', name='{name}'"
-    print(f"DEBUG: hotlist.py: Tool get_kpl_concept_list called with {debug_params}.", file=sys.stderr, flush=True)
+    # Log received parameters for debugging
+    print(f"DEBUG: hotlist.py: get_kpl_concept_list called with trade_date='{trade_date}', ts_code='{ts_code}', name='{name}'", file=sys.stderr, flush=True)
 
     token = get_tushare_token()
     if not token:
-        return "错误: 请先配置Tushare token。您可以使用 Tushare Tools Enhanced 服务中的 setup_tushare_token 工具进行配置。"
+        return "错误: Tushare token未配置。请先在 .tushare_mcp/.env 文件中配置 TUSHARE_TOKEN。"
     
     try:
-        # Initialize Tushare Pro API with the token for this specific call
-        # This is important if ts.set_token() hasn't been called globally or if different tools/files
-        # might operate in different token contexts (though ideally one config should rule)
         pro = ts.pro_api(token)
-        if pro is None: # Double check if pro_api could return None on init failure
-             raise Exception("Tushare API 初始化失败，请检查Token是否有效。")
-
+        if pro is None: # Should not happen if token is valid, but good practice
+             raise Exception("Tushare API 初始化失败，请检查Token是否有效或网络连接。")
 
         api_params = {}
-        if trade_date:
+        if trade_date: # Only add if not an empty string
             api_params['trade_date'] = trade_date
-        if ts_code:
+        if ts_code:    # Only add if not an empty string
             api_params['ts_code'] = ts_code
-        if name:
+        if name:       # Only add if not an empty string
             api_params['name'] = name
         
-        # If no parameters are provided, Tushare might return latest or an error.
-        # The Tushare doc for kpl_concept doesn't explicitly state behavior with no params.
-        # Let's assume user provides at least one, or Tushare handles it.
-        # For safety, one could add a check:
-        if not api_params:
-            # Default to a recent trade_date if Tushare doesn't have a good default
-            # For now, let's require at least one param based on typical use or let Tushare handle it.
-            # Consider adding: return "错误: 请至少提供一个查询参数 (trade_date, ts_code, 或 name)。"
-            # However, the Tushare doc says all are optional.
-            pass
-
+        # The Tushare doc for kpl_concept says all parameters are optional.
+        # If api_params is empty, Tushare might return latest or all concepts, or an error.
+        # It's generally good to inform the user if no specific filters are applied,
+        # or handle it based on expected API behavior.
+        if not api_params: 
+            print("DEBUG: hotlist.py: No specific parameters provided to get_kpl_concept_list. Tushare API will use its default behavior.", file=sys.stderr, flush=True)
+            # Depending on Tushare's behavior for kpl_concept with no params, 
+            # you might want to return a message or fetch default data.
+            # For now, let Tushare handle it, or return a message if it errors.
+            # return "提示: 未提供具体查询参数，将尝试获取默认的开盘啦题材数据。" # Example message
 
         print(f"DEBUG: hotlist.py: Calling pro.kpl_concept with params: {api_params}", file=sys.stderr, flush=True)
         df = pro.kpl_concept(**api_params)
 
         if df.empty:
-            return f"未找到符合条件的开盘啦题材数据。查询参数: {debug_params}"
+            query_desc = f"查询参数: trade_date='{trade_date}', ts_code='{ts_code}', name='{name}'" if api_params else "无特定查询参数"
+            return f"未找到符合条件的开盘啦题材数据。{query_desc}"
 
-        results = [f"--- 开盘啦题材库查询结果 ({debug_params if api_params else '默认/最新'}) ---"]
+        results = [f"--- 开盘啦题材库查询结果 ---"]
+        if api_params:
+            param_strings = [f"{k}='{v}'" for k, v in api_params.items()]
+            results[0] += f" (查询: {', '.join(param_strings)})"
+        else:
+            results[0] += " (默认/最新)"
+
         # Limit output for brevity, e.g., top 20 results
         df_limited = df.head(20)
 
@@ -149,8 +157,7 @@ def get_kpl_concept_list(trade_date: Optional[str] = None, ts_code: Optional[str
                 f"交易日期: {row.get('trade_date', 'N/A')}",
                 f"题材代码: {row.get('ts_code', 'N/A')}",
                 f"题材名称: {row.get('name', 'N/A')}",
-                # z_t_num can be None according to docs, handle it
-                f"涨停数量: {row.get('z_t_num') if pd.notna(row.get('z_t_num')) else 'N/A'}",
+                f"涨停数量: {row.get('z_t_num') if pd.notna(row.get('z_t_num')) else 'N/A'}", # z_t_num can be None
                 f"排名上升位数: {row.get('up_num', 'N/A')}"
             ]
             results.append("\n".join(info_parts))
@@ -162,14 +169,15 @@ def get_kpl_concept_list(trade_date: Optional[str] = None, ts_code: Optional[str
         return "\n".join(results)
 
     except Exception as e:
-        error_msg = f"获取开盘啦题材库数据失败: {str(e)}. Query: {debug_params}"
+        error_msg_detail = f"trade_date='{trade_date}', ts_code='{ts_code}', name='{name}'"
+        error_msg = f"获取开盘啦题材库数据失败: {str(e)}. 查询参数: {error_msg_detail}"
         print(f"DEBUG: hotlist.py: ERROR in get_kpl_concept_list: {error_msg}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
-        # Check if the error is specifically about积分不足 (insufficient credits)
-        if "积分" in str(e) or "credits" in str(e).lower():
-             return f"获取开盘啦题材库数据失败：Tushare积分不足。此接口需要5000积分。({str(e)})"
+        if "积分" in str(e) or "credits" in str(e).lower() or "权限" in str(e):
+             return f"获取开盘啦题材库数据失败：Tushare积分不足或无权限访问此接口。({str(e)})"
         return error_msg
-# --- End of Tool ---
+
+# --- End of Tushare KPL Concept Tool Definition ---
 
 # --- Start of MCP SSE Workaround Integration (copied and adapted from server.py) ---
 MCP_BASE_PATH = "/sse" # The path where the MCP service will be available
