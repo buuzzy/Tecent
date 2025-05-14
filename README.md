@@ -128,32 +128,3 @@ Python 环境是由操作系统或外部工具（比如 Homebrew）管理的。�
    ```bash
    source venv/bin/activate
    ```
-
-## cloudflare 服务说明
-cloudflared 安装命令：
-```bash
-brew install cloudflared && 
-sudo cloudflared service install eyJhIjoiNmQ0YzM1ODQ2ZTQxMzliYTU3NDUzYWRiZWEyOWVmOTkiLCJ0IjoiNjA5NTY4MjQtM2JiZS00ODNiLWEyM2EtZDZmMjE3M2IyZTI1IiwicyI6Ill6UXdNV1k0WmprdE5qSTFOUzAwWmpBeUxXSXpZMkl0Wm1RME5HSTFOekl5WXpkaiJ9
-```
-
-tunnels 启用命令：
-```bash
-sudo cloudflared service install eyJhIjoiNmQ0YzM1ODQ2ZTQxMzliYTU3NDUzYWRiZWEyOWVmOTkiLCJ0IjoiNjA5NTY4MjQtM2JiZS00ODNiLWEyM2EtZDZmMjE3M2IyZTI1IiwicyI6Ill6UXdNV1k0WmprdE5qSTFOUzAwWmpBeUxXSXpZMkl0Wm1RME5HSTFOekl5WXpkaiJ9
-```
-
-tunnels 卸载命令：
-```bash
-sudo cloudflared service uninstall
-```
-
-## 新增 mcp 工具后需要重启持久化服务
-
-停止服务：
-```bash
-launchctl unload ~/Library/LaunchAgents/com.nakocai.tushare-mcp-api.plist
-```
-
-启动服务：
-```bash
-launchctl load ~/Library/LaunchAgents/com.nakocai.tushare-mcp-api.plist
-```
