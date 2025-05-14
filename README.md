@@ -25,7 +25,7 @@
 ```{
   "mcpServers": {
     "Tushare_Tools(Normal)": {
-      "url": "https://mcp-api.chatbotbzy.top/sse",
+      "url": "https://tushare-mcp.onrender.com/sse",
       "type": "sse"
     }
   }
