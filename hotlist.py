@@ -378,8 +378,15 @@ def get_kpl_list_data(
                 f"跌停时间: {row.get('ld_time', 'N/A')}",
                 f"开板时间: {row.get('open_time', 'N/A')}",
                 f"最后涨停: {row.get('last_time', 'N/A')}",
-                f"涨跌幅: {row.get('pct_chg', 'N/A')}%"
+                #f"涨跌幅: {row.get('pct_chg', 'N/A')}%" # Old line
             ]
+            # New logic for pct_chg
+            pct_chg_val = row.get('pct_chg')
+            if pd.isna(pct_chg_val):
+                info_parts.append("涨跌幅: N/A")
+            else:
+                info_parts.append(f"涨跌幅: {pct_chg_val}%")
+
             if pd.notna(row.get('net_change')) and row.get('net_change') != '': # Ensure net_change is meaningful
                 info_parts.append(f"主力净额: {row.get('net_change')}")
             if pd.notna(row.get('amount')) and row.get('amount') != '': # Ensure amount is meaningful
@@ -412,6 +419,150 @@ def get_kpl_list_data(
              return f"获取开盘啦榜单数据失败：Tushare积分不足或无权限访问此接口 (kpl_list 需要至少5000积分)。({str(e)})"
         return error_msg
 # --- End of Tushare KPL List (Ranking Data) Tool Definition ---
+
+# --- Tushare Daily Limit List (U/D/Z Stats) Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_daily_limit_list",
+    description="获取每日股票涨停(U)、跌停(D)和炸板(Z)的详细统计数据，包括行业、市值、连板天数、封单金额、开板次数等。"
+)
+def get_daily_limit_list(
+    trade_date: str = "",
+    ts_code: str = "",
+    limit_type: str = "", # U:涨停, D:跌停, Z:炸板
+    exchange: str = "",   # SH, SZ, BJ
+    start_date: str = "",
+    end_date: str = ""
+) -> str:
+    """
+    获取每日股票涨停、跌停和炸板的详细统计数据。
+
+    参数:
+        trade_date: 交易日期 (YYYYMMDD格式, 例如: 20241014)
+        ts_code: 股票代码 (例如: 000001.SZ)
+        limit_type: 涨跌停类型 ('U'->涨停, 'D'->跌停, 'Z'->炸板)
+        exchange: 交易所代码 ('SH'->上海, 'SZ'->深圳, 'BJ'->北京)
+        start_date: 开始日期 (YYYYMMDD格式)
+        end_date: 结束日期 (YYYYMMDD格式)
+    """
+    print(f"DEBUG: hotlist.py: get_daily_limit_list called with trade_date='{trade_date}', ts_code='{ts_code}', limit_type='{limit_type}', exchange='{exchange}', start_date='{start_date}', end_date='{end_date}'", file=sys.stderr, flush=True)
+
+    global PRO_API_INSTANCE, PRINTED_TOKEN_ERROR
+    if not PRO_API_INSTANCE:
+        if not PRINTED_TOKEN_ERROR:
+            print("ERROR: hotlist.py: Tushare Pro API (PRO_API_INSTANCE) is not available in get_daily_limit_list.", file=sys.stderr, flush=True)
+        return "错误: Tushare Pro API 未成功初始化。请检查服务日志和Tushare token配置。"
+
+    try:
+        api_params = {}
+        if trade_date:
+            api_params['trade_date'] = trade_date
+        if ts_code:
+            api_params['ts_code'] = ts_code
+        if limit_type:
+            api_params['limit_type'] = limit_type.upper() # Ensure U, D, Z
+        if exchange:
+            api_params['exchange'] = exchange.upper() # Ensure SH, SZ, BJ
+        if start_date:
+            api_params['start_date'] = start_date
+        if end_date:
+            api_params['end_date'] = end_date
+        
+        if not api_params.get('trade_date') and not (api_params.get('start_date') and api_params.get('end_date')) :
+            print("DEBUG: hotlist.py: get_daily_limit_list called without specific date(s). This might fetch a lot of data if other filters are also broad.", file=sys.stderr, flush=True)
+        
+        fields_to_get = 'trade_date,ts_code,name,industry,limit,close,pct_chg,limit_times,up_stat,open_times,first_time,last_time,fd_amount,limit_amount,turnover_ratio,amount,float_mv,total_mv'
+        api_params['fields'] = fields_to_get
+
+        print(f"DEBUG: hotlist.py: Calling PRO_API_INSTANCE.limit_list_d with params: {api_params}", file=sys.stderr, flush=True)
+        df = PRO_API_INSTANCE.limit_list_d(**api_params)
+
+        if df.empty:
+            query_desc_parts = []
+            if trade_date: query_desc_parts.append(f"trade_date='{trade_date}'")
+            if ts_code: query_desc_parts.append(f"ts_code='{ts_code}'")
+            if limit_type: query_desc_parts.append(f"limit_type='{api_params.get('limit_type', '')}'")
+            if exchange: query_desc_parts.append(f"exchange='{api_params.get('exchange', '')}'")
+            if start_date: query_desc_parts.append(f"start_date='{start_date}'")
+            if end_date: query_desc_parts.append(f"end_date='{end_date}'")
+            query_str = ", ".join(query_desc_parts) if query_desc_parts else "无特定查询参数"
+            return f"未找到符合条件的每日涨跌停/炸板数据。查询参数: {query_str}"
+
+        results = [f"--- 每日涨跌停/炸板数据 ({api_params.get('limit_type', '综合')}) ---"]
+        param_strings = [f"{k}='{v}'" for k, v_val in api_params.items() if k != 'fields' for v in (v_val if isinstance(v_val, list) else [v_val]) if v] # handle if params could be lists and ensure v is not empty
+        if param_strings:
+             results[0] += f" (查询: {', '.join(param_strings)})"
+        else:
+             results[0] += " (默认查询)"
+        
+        df_limited = df.head(30)
+
+        for _, row in df_limited.iterrows():
+            info_parts = [
+                f"股票: {row.get('ts_code', 'N/A')} ({row.get('name', 'N/A')})",
+                f"日期: {row.get('trade_date', 'N/A')}",
+                f"行业: {row.get('industry', 'N/A')}",
+                f"类型: {row.get('limit', 'N/A')} ({'涨停' if row.get('limit') == 'U' else '跌停' if row.get('limit') == 'D' else '炸板' if row.get('limit') == 'Z' else '未知'})",
+                f"收盘价: {row.get('close', 'N/A')}"
+            ]
+            
+            pct_chg_val = row.get('pct_chg')
+            if pd.isna(pct_chg_val):
+                info_parts.append("涨跌幅: N/A")
+            else:
+                info_parts.append(f"涨跌幅: {pct_chg_val}%")
+
+            info_parts.extend([
+                f"连板天数: {row.get('limit_times', 'N/A')}",
+                f"涨停统计: {row.get('up_stat', 'N/A')}",
+                f"开板/炸板次数: {row.get('open_times', 'N/A')}",
+            ])
+
+            current_limit_type_from_row = row.get('limit') # Use 'limit' field from data row
+            
+            # first_time is not applicable for D (跌停) according to docs
+            if current_limit_type_from_row == 'U' or current_limit_type_from_row == 'Z':
+                 info_parts.append(f"首次封板: {row.get('first_time', 'N/A')}")
+            
+            info_parts.append(f"最后封板: {row.get('last_time', 'N/A')}")
+
+            # fd_amount for U/Z, limit_amount for D
+            if current_limit_type_from_row == 'U' or current_limit_type_from_row == 'Z':
+                info_parts.append(f"封单金额(涨停): {row.get('fd_amount', 'N/A')}")
+            elif current_limit_type_from_row == 'D':
+                info_parts.append(f"板上成交额(跌停): {row.get('limit_amount', 'N/A')}")
+            
+            info_parts.extend([
+                f"成交额: {row.get('amount', 'N/A')}",
+                f"换手率: {row.get('turnover_ratio', 'N/A')}%",
+                f"流通市值: {row.get('float_mv', 'N/A')}",
+                f"总市值: {row.get('total_mv', 'N/A')}"
+            ])
+            
+            results.append("\\n".join(info_parts))
+            results.append("------------------------")
+
+        if len(df) > len(df_limited):
+            results.append(f"注意: 结果超过 {len(df_limited)} 条，仅显示前 {len(df_limited)} 条。共有 {len(df)} 条数据。")
+
+        return "\\n".join(results)
+
+    except Exception as e:
+        error_msg_detail_parts = []
+        if trade_date: error_msg_detail_parts.append(f"trade_date='{trade_date}'")
+        if ts_code: error_msg_detail_parts.append(f"ts_code='{ts_code}'")
+        if limit_type: error_msg_detail_parts.append(f"limit_type='{limit_type.upper()}'") # Use submitted param
+        if exchange: error_msg_detail_parts.append(f"exchange='{exchange.upper()}'") # Use submitted param
+        if start_date: error_msg_detail_parts.append(f"start_date='{start_date}'")
+        if end_date: error_msg_detail_parts.append(f"end_date='{end_date}'")
+        error_msg_detail = ", ".join(error_msg_detail_parts) if error_msg_detail_parts else "无特定参数"
+        
+        error_msg = f"获取每日涨跌停/炸板数据失败: {str(e)}. 查询参数: {error_msg_detail}"
+        print(f"DEBUG: hotlist.py: ERROR in get_daily_limit_list: {error_msg}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        if "积分" in str(e) or "credits" in str(e).lower() or "权限" in str(e):
+             return f"获取每日涨跌停/炸板数据失败：Tushare积分不足或无权限访问此接口 (limit_list_d)。({str(e)})"
+        return error_msg
+# --- End of Tushare Daily Limit List (U/D/Z Stats) Tool Definition ---
 
 # --- Start of MCP SSE Workaround Integration (copied and adapted from server.py) ---
 MCP_BASE_PATH = "/sse" # The path where the MCP service will be available
