@@ -628,6 +628,10 @@ if __name__ == "__main__":
     print("DEBUG: hotlist.py finished main section execution.", file=sys.stderr, flush=True)
 
 # --- 同花顺板块指数列表 Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_ths_index_list",
+    description="获取同花顺板块指数列表，包括概念指数、行业指数、地域指数等。可根据指数代码、市场类型、指数类型筛选。"
+)
 @app.get("/tools/mcp_hotlist_mcp_get_ths_index_list", summary="获取同花顺板块指数列表", deprecated=False)
 async def get_ths_index_list(
     ts_code: Optional[str] = Query(default="", description="指数代码,例如：885835.TI"),
@@ -667,6 +671,10 @@ async def get_ths_index_list(
         return {"error": f"Error calling Tushare ths_index: {str(e)}"}
 
 # --- 同花顺概念板块成分 Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_ths_members",
+    description="获取同花顺概念板块的成分股列表。可根据板块指数代码和股票代码筛选。"
+)
 @app.get("/tools/mcp_hotlist_mcp_get_ths_members", summary="获取同花顺概念板块成分股列表", deprecated=False)
 async def get_ths_members(
     ts_code: Optional[str] = Query(default="", description="板块指数代码, 例如：885800.TI"),
@@ -711,6 +719,10 @@ async def get_ths_members(
         return {"error": f"Error calling Tushare ths_member: {str(e)}"}
 
 # --- 同花顺板块指数行情 Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_ths_daily_data",
+    description="获取同花顺板块指数的每日行情数据。可根据指数代码、交易日期或日期范围筛选。"
+)
 @app.get("/tools/mcp_hotlist_mcp_get_ths_daily_data", summary="获取同花顺板块指数每日行情数据", deprecated=False)
 async def get_ths_daily_data(
     ts_code: Optional[str] = Query(default="", description="指数代码, 例如：865001.TI"),
