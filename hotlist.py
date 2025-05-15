@@ -875,3 +875,66 @@ async def get_dc_members(
         return {"error": f"Error calling Tushare dc_member: {str(e)}"}
 
 # --- End of 东方财富板块成分 Tool Definition ---
+
+# --- 同花顺热榜 Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_ths_hot_list",
+    description="获取同花顺App热榜数据，包括热股、概念板块、ETF等。可按日期、代码、榜单类型筛选。"
+)
+@app.get("/tools/hotlist_mcp_get_ths_hot_list", summary="获取同花顺App热榜数据", deprecated=False)
+async def get_ths_hot_list(
+    trade_date: str = Query(default="", description="交易日期 (YYYYMMDD格式)，例如：20240315"),
+    ts_code: str = Query(default="", description="TS代码，例如：300750.SZ"),
+    market: str = Query(default="", description="热榜类型 (例如：热股, ETF, 概念板块, 行业板块)"),
+    is_new: str = Query(default="Y", description="是否最新 (Y/N, 默认Y)。N则为盘中和盘后阶段采集。")
+):
+    """
+    获取同花顺App热榜数据。
+    数据来源: [Tushare ths_hot](https://tushare.pro/document/2?doc_id=320)
+    权限: 用户积累5000积分可调取。
+    """
+    if not PRO_API_INSTANCE:
+        logger.error("Tushare Pro API uninitialized for get_ths_hot_list.")
+        return {"error": "Tushare Pro API uninitialized. Check token."}
+
+    log_params = f"trade_date='{trade_date}', ts_code='{ts_code}', market='{market}', is_new='{is_new}'"
+    
+    api_params = {}
+    if trade_date:
+        api_params["trade_date"] = trade_date
+    if ts_code:
+        api_params["ts_code"] = ts_code
+    if market:
+        api_params["market"] = market
+    if is_new: # is_new has a default, so it will always be present unless explicitly empty string
+        api_params["is_new"] = is_new
+
+    if not market and not ts_code: # Require at least market or ts_code to make a meaningful query
+        logger.warning(f"get_ths_hot_list called without 'market' or 'ts_code': {log_params}")
+        return {"error": "Please provide at least a 'market' (热榜类型) or a 'ts_code' for ths_hot."}
+    
+    # Define specific fields to fetch; adjust as needed
+    fields_to_get = "trade_date,data_type,ts_code,ts_name,rank,pct_change,current_price,concept,rank_reason,hot,rank_time"
+    api_params["fields"] = fields_to_get
+
+    try:
+        logger.info(f"Calling Tushare API ths_hot with params: {api_params}")
+        df = PRO_API_INSTANCE.ths_hot(**api_params)
+
+        if df is None or df.empty:
+            logger.info(f"No data returned from Tushare ths_hot for params: {log_params}")
+            return {"results": []}
+            
+        # Replace NaN with None (or suitable string like 'N/A') for JSON compatibility
+        df_filled = df.fillna(value=pd.NA).astype(str).where(pd.notna(df), None) # Convert NA to None for JSON
+        results = df_filled.to_dict(orient="records")
+        
+        logger.info(f"Successfully retrieved {len(results)} records from ths_hot for params: {log_params}.")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Error calling Tushare ths_hot with params {log_params}: {e}", exc_info=True)
+        if "积分" in str(e) or "credits" in str(e).lower() or "权限" in str(e):
+             return {"error": f"获取同花顺热榜数据失败：Tushare积分不足或无权限访问此接口 (ths_hot 需要5000积分)。({str(e)})"}
+        return {"error": f"Error calling Tushare ths_hot: {str(e)}"}
+
+# --- End of 同花顺热榜 Tool Definition ---
