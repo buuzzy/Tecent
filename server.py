@@ -28,12 +28,16 @@ print("DEBUG: debug_server.py starting...", file=sys.stderr, flush=True)
 ENV_FILE = Path.home() / ".tushare_mcp" / ".env"
 print(f"DEBUG: ENV_FILE path resolved to: {ENV_FILE}", file=sys.stderr, flush=True)
 
-def _get_stock_name(pro, ts_code: str) -> str:
-    """Internal helper to get stock name, minimizing API calls."""
+def _get_stock_name(pro_api_instance, ts_code: str) -> str:
+    """Helper function to get stock name from ts_code."""
+    print(f"DEBUG: _get_stock_name called for ts_code: {ts_code}", file=sys.stderr, flush=True)
+    if not pro_api_instance:
+        print("DEBUG: _get_stock_name received no pro_api_instance. Cannot fetch name.", file=sys.stderr, flush=True)
+        return ts_code
     try:
-        stock_info = pro.stock_basic(ts_code=ts_code, fields='ts_code,name')
-        if not stock_info.empty:
-            return stock_info.iloc[0]['name']
+        df_basic = pro_api_instance.stock_basic(ts_code=ts_code, fields='ts_code,name')
+        if not df_basic.empty:
+            return df_basic.iloc[0]['name']
     except Exception as e:
         print(f"Warning: Failed to get stock name for {ts_code}: {e}", file=sys.stderr, flush=True)
     return ts_code
@@ -220,10 +224,17 @@ def setup_tushare_token(token: str) -> str:
     """设置Tushare API token"""
     print(f"DEBUG: Tool setup_tushare_token called with token: {'********' if token else 'None'}", file=sys.stderr, flush=True)
     try:
-        set_tushare_token(token)
-        print("DEBUG: setup_tushare_token attempting ts.pro_api() call.", file=sys.stderr, flush=True)
-        ts.pro_api()
-        print("DEBUG: setup_tushare_token ts.pro_api() call successful.", file=sys.stderr, flush=True)
+        set_tushare_token(token) # This function internally calls ts.set_token(token) which might be enough
+                                 # However, to be consistent and absolutely sure, we'll also re-init pro with this token.
+        print("DEBUG: setup_tushare_token attempting explicit ts.pro_api(token) call.", file=sys.stderr, flush=True)
+        # Explicitly get and use the token that was just set for this verification step.
+        current_token = get_tushare_token()
+        if not current_token:
+            # This case should ideally not be reached if set_tushare_token worked and set the env var
+            # that get_tushare_token reads.
+            return "Token配置尝试完成，但未能立即验证。请稍后使用 check_token_status 检查。"
+        ts.pro_api(current_token) # Verify with the token just set and retrieved
+        print("DEBUG: setup_tushare_token ts.pro_api(current_token) call successful.", file=sys.stderr, flush=True)
         return "Token配置成功！您现在可以使用Tushare的API功能了。"
     except Exception as e:
         print(f"DEBUG: ERROR in setup_tushare_token: {str(e)}", file=sys.stderr, flush=True)
@@ -269,10 +280,11 @@ def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
         name: 股票名称（如：平安银行）
     """
     print(f"DEBUG: Tool get_stock_basic_info called with ts_code: '{ts_code}', name: '{name}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         filters = {}
         if ts_code:
             filters['ts_code'] = ts_code
@@ -320,13 +332,14 @@ def search_index(index_name: str, market: str = None, publisher: str = None, cat
         category: 指数类别 (可选, 例如: "规模指数", "行业指数")
     """
     print(f"DEBUG: Tool search_index called with name: '{index_name}', market: '{market}', publisher: '{publisher}', category: '{category}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     if not index_name:
         return "错误: 指数名称 (index_name) 是必需参数。"
 
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         query_params = {
             'name': index_name,
             'fields': 'ts_code,name,fullname,market,publisher,category,list_date'
@@ -387,14 +400,15 @@ def get_index_list(ts_code: str = None, name: str = None, market: str = None, pu
         category: 指数类别 (可选, 例如: "规模指数", "行业指数")
     """
     print(f"DEBUG: Tool get_index_list called with ts_code: '{ts_code}', name: '{name}', market: '{market}', publisher: '{publisher}', category: '{category}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
 
     if not any([ts_code, name, market, publisher, category]):
         return "错误: 请至少提供一个查询参数 (ts_code, name, market, publisher, or category)。"
 
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         query_params = {}
         if ts_code:
             query_params['ts_code'] = ts_code
@@ -457,10 +471,11 @@ def search_stocks(keyword: str) -> str:
         keyword: 关键词（可以是股票代码的一部分或股票名称的一部分）
     """
     print(f"DEBUG: Tool search_stocks called with keyword: '{keyword}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         df = pro.stock_basic()
         mask = (df['ts_code'].str.contains(keyword, case=False, na=False)) | \
                (df['name'].str.contains(keyword, case=False, na=False))
@@ -486,49 +501,35 @@ def get_daily_metrics(ts_code: str, trade_date: str) -> str:
         trade_date: 交易日期 (YYYYMMDD格式, 例如: 20240421)
     """
     print(f"DEBUG: Tool get_daily_metrics called with ts_code: '{ts_code}', trade_date: '{trade_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
-        stock_name = _get_stock_name(pro, ts_code) # Uses helper function
-
-        # --- 获取日线行情数据 (用于成交额 amount) ---
-        df_daily = pro.daily(ts_code=ts_code, trade_date=trade_date)
-        amount_str = "未获取到"
-        if not df_daily.empty:
-            daily_data = df_daily.iloc[0]
-            if 'amount' in daily_data and pd.notna(daily_data['amount']):
-                amount_in_yuan_100m = daily_data['amount'] / 100000 # Tushare daily.amount is in thousands
-                amount_str = f"{amount_in_yuan_100m:.4f} 亿元"
-            else:
-                amount_str = "未提供成交额数据"
-        else:
-            amount_str = "未获取到当日行情数据"
-
-        # --- 获取日线基本指标 (用于换手率 turnover_rate, 量比 volume_ratio) ---
-        df_basic = pro.daily_basic(ts_code=ts_code, trade_date=trade_date)
-        turnover_rate_str = "未获取到"
-        volume_ratio_str = "未获取到"
-        if not df_basic.empty:
-            basic_data = df_basic.iloc[0]
-            if 'turnover_rate' in basic_data and pd.notna(basic_data['turnover_rate']):
-                turnover_rate_str = f"{basic_data['turnover_rate']:.2f}%"
-            else:
-                turnover_rate_str = "未提供换手率数据"
-            if 'volume_ratio' in basic_data and pd.notna(basic_data['volume_ratio']):
-                volume_ratio_str = f"{basic_data['volume_ratio']:.2f}"
-            else:
-                volume_ratio_str = "未提供量比数据"
-        else:
-            turnover_rate_str = "未获取到当日指标数据"
-            volume_ratio_str = "未获取到当日指标数据"
-
-        results = [
-            f"--- {stock_name} ({ts_code}) {trade_date} 行情指标 ---",
-            f"成交额: {amount_str}",
-            f"换手率: {turnover_rate_str}",
-            f"量比: {volume_ratio_str}"
-        ]
+        pro = ts.pro_api(token_value)
+        df = pro.daily_basic(ts_code=ts_code, trade_date=trade_date,
+                             fields='ts_code,trade_date,turnover_rate,volume_ratio,total_mv,circ_mv,pe,pb')
+        if df.empty:
+            return f"未找到 {ts_code} 在 {trade_date} 的每日基本指标数据。"
+        basic_data = df.iloc[0]
+        results = [f"--- {ts_code} {trade_date} 行情指标 ---"]
+        def format_basic(key, label, unit="亿元"):
+            if key in basic_data and pd.notna(basic_data[key]):
+                value = basic_data[key]
+                try:
+                    numeric_value = pd.to_numeric(value)
+                    if unit == "亿元": return f"{label}: {numeric_value:.4f} {unit}"
+                    elif unit == "万元": return f"{label}: {numeric_value:.2f} {unit}"
+                    elif unit == "倍": return f"{label}: {numeric_value:.2f} {unit}"
+                    elif unit == "%": return f"{label}: {numeric_value:.2f}%"
+                    else: return f"{label}: {numeric_value}"
+                except (ValueError, TypeError): return f"{label}: (值非数字: {value})"
+            return f"{label}: 未提供"
+        results.append(format_basic('total_mv', '总市值', unit='万元'))
+        results.append(format_basic('circ_mv', '流通市值', unit='万元'))
+        results.append(format_basic('pe', '市盈率(PE)', unit='倍'))
+        results.append(format_basic('pb', '市净率(PB)', unit='倍'))
+        results.append(format_basic('turnover_rate', '换手率', unit='%'))
+        results.append(format_basic('volume_ratio', '量比'))
         return "\\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_daily_metrics: {str(e)}", file=sys.stderr, flush=True)
@@ -545,34 +546,32 @@ def get_daily_prices(ts_code: str, trade_date: str) -> str:
         trade_date: 交易日期 (YYYYMMDD格式, 例如: 20250227)
     """
     print(f"DEBUG: Tool get_daily_prices called with ts_code: '{ts_code}', trade_date: '{trade_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
-        stock_name = _get_stock_name(pro, ts_code)
-        req_fields = 'ts_code,trade_date,open,high,low,close,pct_chg'
-        df_daily = pro.daily(ts_code=ts_code, trade_date=trade_date, fields=req_fields)
-
-        if df_daily.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在 {trade_date} 的日线行情数据。"
-
-        price_data = df_daily.iloc[0]
-        results = [f"--- {stock_name} ({ts_code}) {trade_date} 价格信息 ---"]
+        pro = ts.pro_api(token_value)
+        df = pro.daily(ts_code=ts_code, trade_date=trade_date,
+                       fields='ts_code,trade_date,open,high,low,close,vol,amount')
+        if df.empty:
+            return f"未找到 {ts_code} ({ts_code}) 在 {trade_date} 的日线行情数据。"
+        price_data = df.iloc[0]
+        results = [f"--- {ts_code} ({ts_code}) {trade_date} 价格信息 ---"]
         price_fields = {
             'open': '开盘价', 'high': '最高价', 'low': '最低价',
-            'close': '收盘价', 'pct_chg': '当日涨跌幅'
+            'close': '收盘价', 'vol': '成交量', 'amount': '成交额'
         }
         for field, label in price_fields.items():
             if field in price_data and pd.notna(price_data[field]):
                 try:
                     numeric_value = pd.to_numeric(price_data[field])
-                    unit = '元' if field in ['open', 'high', 'low', 'close'] else '%'
+                    unit = '元' if field in ['open', 'high', 'low', 'close'] else '万股'
                     results.append(f"{label}: {numeric_value:.2f} {unit}")
                 except (ValueError, TypeError):
-                    unit = '元' if field in ['open', 'high', 'low', 'close'] else '%' # Ensure unit is defined for error case
+                    unit = '元' if field in ['open', 'high', 'low', 'close'] else '万股' # Ensure unit is defined for error case
                     results.append(f"{label}: (值非数字: {price_data[field]}) {unit}")
             else:
-                unit = '元' if field in ['open', 'high', 'low', 'close'] else '%' # Ensure unit is defined for missing case
+                unit = '元' if field in ['open', 'high', 'low', 'close'] else '万股' # Ensure unit is defined for missing case
                 results.append(f"{label}: 未提供 {unit}")
         return "\\n".join(results)
     except Exception as e:
@@ -607,13 +606,13 @@ def get_financial_indicator(
         end_date: 公告结束日期 (可选, YYYYMMDD格式, 与start_date一同使用)
         limit: 返回记录的条数上限 (默认为10)
     """
-    debug_params = f"ts_code='{ts_code}', period='{period}', ann_date='{ann_date}', start_date='{start_date}', end_date='{end_date}', limit={limit}"
-    print(f"DEBUG: Tool get_financial_indicator (enhanced) called with {debug_params}.", file=sys.stderr, flush=True)
+    print(f"DEBUG: Tool get_financial_indicator called with ts_code: '{ts_code}', period: '{period}', ann_date: '{ann_date}', start_date: '{start_date}', end_date: '{end_date}', limit: {limit}.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
 
-    if not get_tushare_token():
-        return "请先配置Tushare token"
     if not ts_code:
-        return "错误: 股票代码 (ts_code) 是必需的。"
+        return "错误：股票代码 (ts_code) 是必需的。"
 
     if not (period or ann_date or (start_date and end_date)):
         return "错误: 请至少提供 period, ann_date, 或 start_date 与 end_date 组合中的一组参数。"
@@ -621,7 +620,7 @@ def get_financial_indicator(
         return "错误: start_date 和 end_date 必须同时提供。"
 
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
         
         api_params = {'ts_code': ts_code}
@@ -707,7 +706,8 @@ def get_financial_indicator(
         return "\n".join(all_results_str)
 
     except Exception as e:
-        print(f"DEBUG: ERROR in get_financial_indicator (enhanced) for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        # Corrected error logging to use available parameters directly
+        print(f"DEBUG: ERROR in get_financial_indicator for ts_code='{ts_code}', period='{period}', ann_date='{ann_date}', start_date='{start_date}', end_date='{end_date}': {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取财务指标失败：{str(e)}"
 
@@ -722,23 +722,17 @@ def get_income_statement(ts_code: str, period: str, report_type: str = "1") -> s
         report_type: 报告类型（默认为1，合并报表）
     """
     print(f"DEBUG: Tool get_income_statement called with ts_code: '{ts_code}', period: '{period}', report_type: '{report_type}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not period or len(period) != 8 or not period.isdigit():
-         return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
-        stock_name = _get_stock_name(pro, ts_code)
-        req_fields = 'ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,basic_eps,total_revenue,n_income_attr_p,sell_exp,admin_exp,fin_exp,rd_exp,update_flag'
-        params_current = {
-            'ts_code': ts_code, 'period': period, 'report_type': report_type, 'fields': req_fields
-        }
-        df_current_latest = _fetch_latest_report_data(
-            pro.income, result_period_field_name='end_date', result_period_value=period, **params_current
-        )
-        if df_current_latest is None:
-            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} 的利润表数据。"
-        current_income_data = df_current_latest.iloc[0]
+        pro = ts.pro_api(token_value)
+        # 获取当期利润表
+        df_current = pro.income(ts_code=ts_code, period=period, report_type=report_type,
+                                fields='ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,basic_eps,n_income_attr_p')
+        if df_current.empty:
+            return f"未找到 {ts_code} ({ts_code}) 在 {period} 的利润表数据。"
+        current_income_data = df_current.iloc[0]
         current_profit = pd.to_numeric(current_income_data.get('n_income_attr_p'), errors='coerce')
 
         year = int(period[:4])
@@ -768,7 +762,7 @@ def get_income_statement(ts_code: str, period: str, report_type: str = "1") -> s
             else: 
                  profit_yoy = ((current_profit - previous_profit) / previous_profit) * 100
                  profit_yoy_str = f"{profit_yoy:.2f}%"
-        results = [f"--- {stock_name} ({ts_code}) {period} 利润表数据 ---"]
+        results = [f"--- {ts_code} ({ts_code}) {period} 利润表数据 ---"]
         def format_value(key, unit="亿元"):
             data_source = current_income_data
             if key in data_source and pd.notna(data_source[key]):
@@ -846,13 +840,11 @@ def get_shareholder_count(ts_code: str, end_date: str = "") -> str:
         end_date: 截止日期 (YYYYMMDD, 例如: 20240930)
     """
     print(f"DEBUG: Tool get_shareholder_count called with ts_code: '{ts_code}', end_date: '{end_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not end_date:
-        return "错误：请提供截止日期 (end_date)。"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
-        stock_name = _get_stock_name(pro, ts_code)
+        pro = ts.pro_api(token_value)
         params = {
             'ts_code': ts_code, 'enddate': end_date, 'fields': 'ts_code,ann_date,enddate,holder_num'
         }
@@ -863,18 +855,18 @@ def get_shareholder_count(ts_code: str, end_date: str = "") -> str:
             **params
         )
         if df_holder_latest is None or df_holder_latest.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在 {end_date} 的股东户数数据。"
+            return f"未找到 {ts_code} ({ts_code}) 在 {end_date} 的股东户数数据。"
         holder_data = df_holder_latest.iloc[0]
         holder_num = holder_data.get('holder_num', None)
         ann_date_val = holder_data.get('ann_date', 'N/A')
         if pd.isna(holder_num):
-            return f"获取到 {stock_name} ({ts_code}) 在 {end_date} 的记录，但股东户数 (holder_num) 字段为空或无效。公告日期: {ann_date_val}"
+            return f"获取到 {ts_code} ({ts_code}) 在 {end_date} 的记录，但股东户数 (holder_num) 字段为空或无效。公告日期: {ann_date_val}"
         try:
             holder_num_int = int(holder_num)
             holder_num_wan = holder_num_int / 10000
-            return f"截至 {end_date}，{stock_name} ({ts_code}) 股东户数为: {holder_num_wan:.2f} 万户 (公告日期: {ann_date_val})"
+            return f"截至 {end_date}，{ts_code} ({ts_code}) 股东户数为: {holder_num_wan:.2f} 万户 (公告日期: {ann_date_val})"
         except (ValueError, TypeError):
-            return f"获取到 {stock_name} ({ts_code}) 在 {end_date} 的股东户数数据，但无法转换为数字: {holder_num}。公告日期: {ann_date_val}"
+            return f"获取到 {ts_code} ({ts_code}) 在 {end_date} 的股东户数数据，但无法转换为数字: {holder_num}。公告日期: {ann_date_val}"
     except Exception as e:
         print(f"DEBUG: ERROR in get_shareholder_count: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -890,19 +882,17 @@ def get_daily_basic_info(ts_code: str, trade_date: str) -> str:
         trade_date: 交易日期 (YYYYMMDD, 例如: 20240930)
     """
     print(f"DEBUG: Tool get_daily_basic_info called with ts_code: '{ts_code}', trade_date: '{trade_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not trade_date:
-        return "错误：请提供交易日期 (trade_date)。"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
-        stock_name = _get_stock_name(pro, ts_code)
-        req_fields = 'ts_code,trade_date,total_share,float_share,free_share,total_mv,circ_mv,pe,pb,dv_ratio'
-        df_basic = pro.daily_basic(ts_code=ts_code, trade_date=trade_date, fields=req_fields)
-        if df_basic.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在 {trade_date} 的每日基本指标数据。"
-        basic_data = df_basic.iloc[0]
-        results = [f"--- {stock_name} ({ts_code}) {trade_date} 基本指标 ---"]
+        pro = ts.pro_api(token_value)
+        df = pro.daily_basic(ts_code=ts_code, trade_date=trade_date,
+                             fields='ts_code,trade_date,total_share,float_share,total_mv,circ_mv,free_share')
+        if df.empty:
+            return f"未找到 {ts_code} ({ts_code}) 在 {trade_date} 的每日基本指标数据。"
+        basic_data = df.iloc[0]
+        results = [f"--- {ts_code} ({ts_code}) {trade_date} 基本指标 ---"]
         def format_basic(key, label, unit="万股"):
             if key in basic_data and pd.notna(basic_data[key]):
                 value = basic_data[key]
@@ -940,49 +930,31 @@ def get_top_holders(ts_code: str, period: str, holder_type: str = 'H') -> str:
         holder_type: 股东类型 ('H'=前十大股东, 'F'=前十大流通股东, 默认为'H')
     """
     print(f"DEBUG: Tool get_top_holders called with ts_code: '{ts_code}', period: '{period}', holder_type: '{holder_type}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not period:
-        return "错误：请提供报告期 (period)。"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    if not period or len(period) != 8 or not period.isdigit():
+        return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
     if holder_type not in ['H', 'F']:
-        return "错误：holder_type 参数必须是 'H' (前十大股东) 或 'F' (前十大流通股东)。"
+        return "错误：'holder_type' 参数必须是 'H' (前十大股东) 或 'F' (前十大流通股东)。"
+
     try:
-        pro = ts.pro_api()
-        stock_name = _get_stock_name(pro, ts_code)
-        api_func = pro.top10_holders if holder_type == 'H' else pro.top10_floatholders
-        type_desc = "前十大股东" if holder_type == 'H' else "前十大流通股东"
-        req_fields = 'ts_code,ann_date,end_date,holder_name,hold_amount,hold_ratio' 
-        if holder_type == 'H': 
-            req_fields += ',holder_type'
-        params = {'ts_code': ts_code, 'period': period, 'fields': req_fields}
-        df_holders_data = _fetch_latest_report_data(
-            api_func, 
-            result_period_field_name='end_date', 
-            result_period_value=period, 
-            is_list_result=True,  
-            **params
-        )
-        if df_holders_data is None or df_holders_data.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在 {period} 的{type_desc}数据。"
-        latest_ann_date = df_holders_data['ann_date'].iloc[0] if not df_holders_data.empty and 'ann_date' in df_holders_data.columns else 'N/A'
-        results = [f"--- {stock_name} ({ts_code}) {period} {type_desc} (公告日期: {latest_ann_date}) ---"]
-        for index, row in df_holders_data.iterrows(): 
-            rank = index + 1 
-            results.append(f"{rank}. 股东名称: {row.get('holder_name', 'N/A')}")
-            hold_amount_wan = row.get('hold_amount', float('nan')) / 10000 
-            hold_amount_str = f"{hold_amount_wan:.4f}" if pd.notna(hold_amount_wan) else 'N/A'
-            hold_ratio_val = row.get('hold_ratio')
-            hold_ratio_str = f"{hold_ratio_val:.2f}%" if pd.notna(hold_ratio_val) else 'N/A'
-            results.append(f"   持有数量: {hold_amount_str} 万股")
-            results.append(f"   占总股本比例: {hold_ratio_str}")
-            if holder_type == 'H' and 'holder_type' in row and pd.notna(row['holder_type']):
-                 results.append(f"   股东类型: {row['holder_type']}") 
+        pro = ts.pro_api(token_value)
+        api_to_call = pro.top10_holders if holder_type == 'H' else pro.top10_floatholders
+        df = api_to_call(ts_code=ts_code, period=period,
+                         fields='ts_code,ann_date,end_date,holder_name,hold_amount,hold_ratio')
+        if df.empty:
+            return f"未找到 {ts_code} ({ts_code}) 在 {period} 的{holder_type}数据。"
+
+        results = [f"--- {ts_code} ({ts_code}) {period} {holder_type} (公告日期: {df['ann_date'].iloc[0]}) ---"]
+        for _, row in df.iterrows():
+            results.append(f"{row['holder_name']} | {row['hold_amount'] / 10000:.4f} 万股 | {row['hold_ratio']:.2f}%")
             results.append("-" * 5)
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_top_holders: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
-        return f"获取{type_desc}失败：{str(e)}"
+        return f"获取{holder_type}失败：{str(e)}"
 
 @mcp.tool()
 def get_index_constituents(index_code: str, start_date: str, end_date: str) -> str:
@@ -996,53 +968,24 @@ def get_index_constituents(index_code: str, start_date: str, end_date: str) -> s
         start_date: 开始日期 (YYYYMMDD格式, 例如: 20230901)
         end_date: 结束日期 (YYYYMMDD格式, 例如: 20230930)
     """
-    print(f"DEBUG: Tool get_index_constituents called for index: '{index_code}', start: '{start_date}', end: '{end_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not index_code or not start_date or not end_date:
-        return "错误: index_code, start_date, 和 end_date 都是必需参数。"
+    print(f"DEBUG: Tool get_index_constituents called with index_code: '{index_code}', start_date: '{start_date}', end_date: '{end_date}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
-        
-        index_name = index_code # Default to code
-        try:
-            # Attempt to fetch the index's display name
-            index_basic_df = pro.index_basic(ts_code=index_code, fields='ts_code,name')
-            if not index_basic_df.empty and 'name' in index_basic_df.columns:
-                index_name = index_basic_df.iloc[0]['name']
-        except Exception as e_idx_name:
-            print(f"Warning: Failed to get index name for {index_code}: {e_idx_name}", file=sys.stderr, flush=True)
-
-        # Fetch index weight data
-        # Fields explicitly requested: index_code, con_code (constituent code), trade_date, weight
-        df = pro.index_weight(index_code=index_code, start_date=start_date, end_date=end_date, fields='index_code,con_code,trade_date,weight')
-
+        pro = ts.pro_api(token_value)
+        df = pro.index_weight(index_code=index_code, start_date=start_date, end_date=end_date,
+                              fields='index_code,con_code,trade_date,weight')
         if df.empty:
-            return f"未找到指数 {index_name} ({index_code}) 在 {start_date} 至 {end_date} 期间的成分股数据。"
+            return f"未找到指数 {index_code} 在 {start_date} 至 {end_date} 期间的成分股数据。"
 
-        # Assuming trade_date is consistent for the month's data, take from the first row.
-        record_trade_date = df['trade_date'].iloc[0] if 'trade_date' in df.columns and not df.empty else "未知"
-
-        results = [f"--- {index_name} ({index_code}) 成分股及权重 (截至 {record_trade_date}, 查询区间 {start_date}-{end_date}) ---"]
-        
-        # Sort by weight in descending order for better readability
-        df_sorted = df.sort_values(by='weight', ascending=False)
-
-        for _, row in df_sorted.iterrows():
-            con_code = row.get('con_code')
-            weight = row.get('weight')
-            
-            if con_code is None: # Should not happen if API returns valid data
-                continue
-
-            stock_name = _get_stock_name(pro, con_code) # Use existing helper to get stock name
-
-            weight_str = f"{weight:.4f}%" if pd.notna(weight) else "N/A" # Format weight as percentage string
-            results.append(f"成分股: {con_code} ({stock_name}), 权重: {weight_str}")
-        
+        results = [f"--- {index_code} 成分股及权重 (截至 {df['trade_date'].iloc[0]}, 查询区间 {start_date}-{end_date}) ---"]
+        for _, row in df.iterrows():
+            results.append(f"成分股: {row['con_code']} ({_get_stock_name(pro, row['con_code'])}) | 权重: {row['weight']:.4f}%")
+            results.append("------------------------")
         return "\n".join(results)
     except Exception as e:
-        print(f"DEBUG: ERROR in get_index_constituents for {index_code}: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_index_constituents: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取指数 {index_code} 成分股数据失败：{str(e)}"
 
@@ -1057,16 +1000,17 @@ def get_global_index_quotes(ts_code: str, start_date: str = None, end_date: str 
         end_date: 结束日期 (YYYYMMDD格式, 例如: 20240131)。如果提供了trade_date，此参数将被忽略。
         trade_date: 单个交易日期 (YYYYMMDD格式, 例如: 20240115)。如果提供，将只查询该日数据。
     """
-    print(f"DEBUG: Tool get_global_index_quotes called for ts_code: '{ts_code}', trade_date: '{trade_date}', start_date: '{start_date}', end_date: '{end_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    print(f"DEBUG: Tool get_global_index_quotes called with ts_code: '{ts_code}', start_date: '{start_date}', end_date: '{end_date}', trade_date: '{trade_date}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     if not ts_code:
-        return "错误: 指数代码 (ts_code) 是必需参数。"
+        return "错误：指数代码 (ts_code) 是必需的。"
     if not trade_date and not (start_date and end_date):
         return "错误: 请提供 trade_date 或同时提供 start_date 和 end_date。"
 
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         params = {
             'ts_code': ts_code,
             'fields': 'ts_code,trade_date,open,close,high,low,pre_close,change,pct_chg,swing,vol,amount'
@@ -1139,13 +1083,12 @@ def get_period_price_change(ts_code: str, start_date: str, end_date: str) -> str
         start_date: 区间开始日期 (YYYYMMDD, 例如: 20240701)
         end_date: 区间结束日期 (YYYYMMDD, 例如: 20240930)
     """
-    print(f"DEBUG: Tool get_period_price_change called with ts_code: '{ts_code}', start: '{start_date}', end: '{end_date}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not start_date or not end_date:
-        return "错误：请提供完整的开始日期 (start_date) 和结束日期 (end_date)。"
+    print(f"DEBUG: Tool get_period_price_change called with ts_code: '{ts_code}', start_date: '{start_date}', end_date: '{end_date}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
         # Fetch daily data for the given range
         df_daily = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date, fields='trade_date,close')
@@ -1188,12 +1131,13 @@ def get_balance_sheet(ts_code: str, period: str) -> str:
         period: 报告期 (YYYYMMDD格式, 例如: 20240930)
     """
     print(f"DEBUG: Tool get_balance_sheet called with ts_code: '{ts_code}', period: '{period}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     if not period or len(period) != 8 or not period.isdigit():
-         return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
+        return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
         req_fields = (
             'ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,'
@@ -1265,12 +1209,13 @@ def get_cash_flow(ts_code: str, period: str) -> str:
         period: 报告期 (YYYYMMDD格式, 例如: 20240930)
     """
     print(f"DEBUG: Tool get_cash_flow called with ts_code: '{ts_code}', period: '{period}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     if not period or len(period) != 8 or not period.isdigit():
-         return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
+        return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
         req_fields = (
             'ts_code,ann_date,f_ann_date,end_date,report_type,comp_type,net_profit,finan_exp,'
@@ -1323,46 +1268,34 @@ def get_pledge_detail(ts_code: str) -> str:
     参数:
         ts_code: 股票代码 (例如: 002277.SZ)
     """
-    print(f"DEBUG: Tool get_pledge_detail called with ts_code: '{ts_code}'.", file=sys.stderr, flush=True)
-    if not get_tushare_token():
-        return "请先配置Tushare token"
+    print(f"DEBUG: Tool get_pledge_detail called for ts_code: '{ts_code}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
-        # For pledge_detail, it returns a list of all pledge details, not typically tied to a single report period.
-        # So, we call it directly and then sort if needed. _fetch_latest_report_data is not suitable here.
-        df_detail = pro.pledge_detail(ts_code=ts_code)
-
-        if df_detail.empty:
+        df = pro.pledge_stat(ts_code=ts_code,
+                             fields='ts_code,end_date,pledge_count,unrest_pledge,rest_pledge,total_share,pledge_ratio')
+        if df.empty:
             return f"未找到 {stock_name} ({ts_code}) 的股权质押明细数据。"
 
-        results = [f"--- {stock_name} ({ts_code}) 股权质押明细 (按最新公告日期、质押开始日降序) ---"]
-        header = "股东名称 | 质押股份(万股) | 开始日 | 截止日 | 状态 | 公告日"
-        results.append(header)
-        results.append("-" * (len(header.replace(" | ", "")) + 2*header.count("|"))) # Dynamic separator length
-        
-        # Sort by announcement date, then by pledge start date, both descending
-        df_detail_sorted = df_detail.sort_values(by=['ann_date', 'start_date'], ascending=[False, False])
-
-        for _, row in df_detail_sorted.iterrows():
-            holder = row.get('holder_name', 'N/A')
-            pledge_amount_raw = row.get('pledge_amount') # Unit is Wan Gu (万股) directly from API
-            pledge_amount_str = f"{pledge_amount_raw:.2f}" if pd.notna(pledge_amount_raw) else "N/A"
-            
-            start_date = row.get('start_date', 'N/A')
-            end_date = row.get('end_date', 'N/A')
-            status = row.get('status', 'N/A')
-            ann_date = row.get('ann_date', 'N/A')
-            results.append(f"{holder} | {pledge_amount_str} | {start_date} | {end_date} | {status} | {ann_date}")
-
-        return "\\n".join(results)
+        results = [f"--- {stock_name} ({ts_code}) 股权质押明细 ---"]
+        for _, row in df.iterrows():
+            results.append(f"质押股份: {row['pledge_count']} 万股")
+            results.append(f"未质押股份: {row['unrest_pledge']} 万股")
+            results.append(f"已质押股份: {row['rest_pledge']} 万股")
+            results.append(f"总股本: {row['total_share']} 万股")
+            results.append(f"质押比例: {row['pledge_ratio']:.2f}%")
+            results.append("------------------------")
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_pledge_detail: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取股权质押明细失败：{str(e)}"
 
 @mcp.tool()
-def get_fina_mainbz(ts_code: str, period: str, type: Optional[str] = None, limit: Optional[int] = None) -> str:
+def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10) -> str:
     """
     获取上市公司主营业务构成。
 
@@ -1372,81 +1305,33 @@ def get_fina_mainbz(ts_code: str, period: str, type: Optional[str] = None, limit
         type: 构成类型 ('P'代表按产品, 'D'代表按地区，默认为'P')
         limit: 显示条数上限 (默认为10)
     """
-    type_param = type if type else 'P'
-    limit_param = limit if limit is not None and limit > 0 else 10
-    debug_params = f"ts_code='{ts_code}', period='{period}', type='{type_param}', limit={limit_param}"
-    print(f"DEBUG: Tool get_fina_mainbz called with {debug_params}.", file=sys.stderr, flush=True)
-
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not ts_code or not period:
-        return "错误: 股票代码 (ts_code) 和报告期 (period) 是必需的。"
-    if not (len(period) == 8 and period.isdigit()):
+    print(f"DEBUG: Tool get_fina_mainbz called with ts_code: '{ts_code}', period: '{period}', type: '{type}', limit: {limit}.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    if not period or len(period) != 8 or not period.isdigit():
         return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
+    if type not in ['P', 'D']:
+        return "错误：'type' 参数必须是 'P' (按产品) 或 'D' (按地区)。"
 
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
-        
-        # Fields from Tushare: ts_code, ann_date, end_date, bz_item, bz_sales, bz_profit, bz_cost, curr_type, update_flag
-        req_fields = 'ts_code,ann_date,end_date,bz_item,bz_sales,bz_profit,bz_cost,curr_type'
-        
-        api_params = {
-            'ts_code': ts_code,
-            'period': period,
-            'type': type_param,
-            'fields': req_fields
-        }
-        
-        df_mainbz_list = _fetch_latest_report_data(
-            pro.fina_mainbz,
-            result_period_field_name='end_date', # 'end_date' in fina_mainbz output is the report period
-            result_period_value=period,
-            is_list_result=True, # We want all business items for the latest announcement of this period
-            **api_params
-        )
+        df = pro.fina_mainbz(ts_code=ts_code, period=period, type=type, fields='ts_code,end_date,bz_item,bz_amount,bz_ratio,bz_type')
+        if df.empty:
+            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} 的主营业务构成数据。"
 
-        if df_mainbz_list is None or df_mainbz_list.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} (类型: {type_param}) 的主营业务构成数据。"
-
-        latest_ann_date = df_mainbz_list['ann_date'].iloc[0] if 'ann_date' in df_mainbz_list.columns and not df_mainbz_list.empty else "N/A"
-        report_end_date = df_mainbz_list['end_date'].iloc[0] if 'end_date' in df_mainbz_list.columns and not df_mainbz_list.empty else period
-        
-        results = [f"--- {stock_name} ({ts_code}) 主营业务构成 ({report_end_date}, 类型: {type_param}, 公告: {latest_ann_date}) ---"]
-        
-        # Tushare's fina_mainbz is typically sorted by bz_sales desc by default.
-        # We just need to limit the number of records.
-        actual_items_to_show = df_mainbz_list.head(limit_param)
-
-        for _, row in actual_items_to_show.iterrows():
-            item_parts = [f"业务项目: {row.get('bz_item', 'N/A')}"]
-            
-            def format_bz_value(key, label, unit="亿元"):
-                if key in row and pd.notna(row[key]):
-                    value = row[key]
-                    try:
-                        numeric_value = pd.to_numeric(value)
-                        if unit == "亿元": # bz_sales, bz_profit, bz_cost are in Yuan
-                            return f"{label}: {numeric_value / 100000000:.4f} {unit}"
-                        else:
-                            return f"{label}: {numeric_value}"
-                    except (ValueError, TypeError):
-                        return f"{label}: (值非数字: {value})"
-                return f"{label}: 未提供"
-
-            item_parts.append(format_bz_value('bz_sales', '营业收入'))
-            item_parts.append(format_bz_value('bz_profit', '营业利润'))
-            item_parts.append(format_bz_value('bz_cost', '营业成本'))
-            item_parts.append(f"币种: {row.get('curr_type', 'N/A')}")
-            results.append("\n".join(item_parts))
-            results.append("-" * 20)
-            
-        if len(df_mainbz_list) > limit_param:
-            results.append(f"注意: 主营业务项目超过 {limit_param} 条，仅显示主要项目。")
-
+        results = [f"--- {stock_name} ({ts_code}) 主营业务构成 ---"]
+        for _, row in df.iterrows():
+            results.append(f"业务项目: {row['bz_item']}")
+            results.append(f"营业收入: {row['bz_amount'] / 100000000:.4f} 亿元")
+            results.append(f"营业利润: {row['bz_amount'] / 100000000:.4f} 亿元")
+            results.append(f"营业成本: {row['bz_amount'] / 100000000:.4f} 亿元")
+            results.append(f"币种: {row['bz_type']}")
+            results.append("------------------------")
         return "\n".join(results)
     except Exception as e:
-        print(f"DEBUG: ERROR in get_fina_mainbz for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_fina_mainbz: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取主营业务构成失败: {str(e)}"
 
@@ -1459,71 +1344,34 @@ def get_fina_audit(ts_code: str, period: str) -> str:
         ts_code: 股票代码 (例如: 000001.SZ)
         period: 报告期 (YYYYMMDD格式, 例如: 20231231)
     """
-    debug_params = f"ts_code='{ts_code}', period='{period}'"
-    print(f"DEBUG: Tool get_fina_audit called with {debug_params}.", file=sys.stderr, flush=True)
-
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not ts_code or not period:
-        return "错误: 股票代码 (ts_code) 和报告期 (period) 是必需的。"
-    if not (len(period) == 8 and period.isdigit()):
+    print(f"DEBUG: Tool get_fina_audit called with ts_code: '{ts_code}', period: '{period}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    if not period or len(period) != 8 or not period.isdigit():
         return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
-        
     try:
-        pro = ts.pro_api()
+        pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
-        
-        # Fields from Tushare: ts_code, ann_date, end_date, audit_result, audit_fees, audit_agency, audit_sign
-        req_fields = 'ts_code,ann_date,end_date,audit_result,audit_fees,audit_agency,audit_sign'
-        
-        api_params = {
-            'ts_code': ts_code,
-            'period': period, # Tushare API for fina_audit takes 'period'
-            'fields': req_fields
-        }
-        
-        df_audit_latest = _fetch_latest_report_data(
-            pro.fina_audit,
-            result_period_field_name='end_date', # 'end_date' in fina_audit output is the report period
-            result_period_value=period,
-            is_list_result=False, # We expect one audit opinion for the period's latest announcement
-            **api_params
-        )
-
-        if df_audit_latest is None or df_audit_latest.empty:
+        df = pro.fina_audit(ts_code=ts_code, period=period, fields='ts_code,ann_date,end_date,audit_result,audit_agency,audit_sign')
+        if df.empty:
             return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} 的财务审计意见数据。"
 
-        audit_data = df_audit_latest.iloc[0]
-        
-        report_end_date = audit_data.get('end_date', period)
-        ann_date = audit_data.get('ann_date', 'N/A')
-        
-        results = [f"--- {stock_name} ({ts_code}) 财务审计意见 ({report_end_date}, 公告: {ann_date}) ---"]
-        
-        results.append(f"审计结果: {audit_data.get('audit_result', '未提供')}")
-        
-        audit_fees_raw = audit_data.get('audit_fees')
-        if pd.notna(audit_fees_raw):
-            try:
-                audit_fees_yuan = pd.to_numeric(audit_fees_raw)
-                # audit_fees in Tushare are in Yuan. Convert to 100 million Yuan.
-                results.append(f"审计费用: {audit_fees_yuan / 100000000:.4f} 亿元")
-            except (ValueError, TypeError):
-                results.append(f"审计费用: (值非数字: {audit_fees_raw})")
-        else:
-            results.append("审计费用: 未提供")
-            
-        results.append(f"会计事务所: {audit_data.get('audit_agency', '未提供')}")
-        results.append(f"签字会计师: {audit_data.get('audit_sign', '未提供')}")
-        
+        results = [f"--- {stock_name} ({ts_code}) 财务审计意见 ---"]
+        for _, row in df.iterrows():
+            results.append(f"审计结果: {row['audit_result']}")
+            results.append(f"审计费用: {row['audit_fees'] / 100000000:.4f} 亿元")
+            results.append(f"会计事务所: {row['audit_agency']}")
+            results.append(f"签字会计师: {row['audit_sign']}")
+            results.append("------------------------")
         return "\n".join(results)
     except Exception as e:
-        print(f"DEBUG: ERROR in get_fina_audit for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_fina_audit: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取财务审计意见失败: {str(e)}"
 
 @mcp.tool()
-def get_top_list_detail(trade_date: str, ts_code: Optional[str] = None) -> str:
+def get_top_list_detail(trade_date: str, ts_code: str = None) -> str:
     """
     获取龙虎榜每日交易明细。
 
@@ -1531,70 +1379,54 @@ def get_top_list_detail(trade_date: str, ts_code: Optional[str] = None) -> str:
         trade_date: 交易日期 (YYYYMMDD格式, 必填)
         ts_code: 股票代码 (可选, 例如: 000001.SZ)
     """
-    debug_params = f"trade_date='{trade_date}', ts_code='{ts_code}'"
-    print(f"DEBUG: Tool get_top_list_detail called with {debug_params}.", file=sys.stderr, flush=True)
-
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not trade_date or not (len(trade_date) == 8 and trade_date.isdigit()):
-        return "错误：请提供有效的 'trade_date' 参数 (YYYYMMDD格式)。"
+    print(f"DEBUG: Tool get_top_list_detail called with trade_date: '{trade_date}', ts_code: '{ts_code}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    if not trade_date:
+        return "错误：交易日期 (trade_date) 是必需的。"
 
     try:
-        pro = ts.pro_api()
-        
-        api_params = {'trade_date': trade_date}
+        pro = ts.pro_api(token_value)
+        params = {'trade_date': trade_date}
         if ts_code:
-            api_params['ts_code'] = ts_code
-        
-        # Define the fields to request, ensuring all described fields are included.
-        # Tushare's default for top_list usually includes most of these, but explicitly listing them is safer.
-        req_fields = (
-            'trade_date,ts_code,name,close,pct_change,turnover_rate,amount,'
-            'l_sell,l_buy,l_amount,net_amount,net_rate,amount_rate,float_values,reason'
-        )
-        api_params['fields'] = req_fields
+            params['ts_code'] = ts_code
+        params['fields'] = 'trade_date,ts_code,name,close,pct_chg,turnover_rate,buy_sm_amount,sell_sm_amount,net_amount,exlist_reason'
+        df = pro.top_list(**params)
 
-        df_top_list = pro.top_list(**api_params)
+        if df.empty:
+            # Corrected f-string for the empty case
+            return f"在 {trade_date} {('的股票 ' + ts_code) if ts_code else ''} 未找到龙虎榜数据。"
 
-        if df_top_list.empty:
-            stock_info = f"股票 {ts_code} " if ts_code else ""
-            return f"未找到 {stock_info}在 {trade_date} 的龙虎榜数据。"
-
-        results = [f"--- {trade_date} 龙虎榜每日明细 ---"]
-        if ts_code:
-            stock_name = df_top_list['name'].iloc[0] if not df_top_list.empty and 'name' in df_top_list.columns else ts_code
-            results = [f"--- {stock_name} ({ts_code}) {trade_date} 龙虎榜明细 ---"]
-
-
-        for _, row in df_top_list.iterrows():
-            item_details = [
-                f"股票名称: {row.get('name', 'N/A')} ({row.get('ts_code', 'N/A')})",
-                f"交易日期: {row.get('trade_date', 'N/A')}",
-                f"收盘价: {row.get('close', 'N/A'):.2f}" if pd.notna(row.get('close')) else "收盘价: N/A",
-                f"涨跌幅: {row.get('pct_change', 'N/A'):.2f}%" if pd.notna(row.get('pct_change')) else "涨跌幅: N/A",
-                f"换手率: {row.get('turnover_rate', 'N/A'):.2f}%" if pd.notna(row.get('turnover_rate')) else "换手率: N/A",
-                f"总成交额: {row.get('amount', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('amount')) else "总成交额: N/A",
-                f"龙虎榜卖出额: {row.get('l_sell', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('l_sell')) else "龙虎榜卖出额: N/A",
-                f"龙虎榜买入额: {row.get('l_buy', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('l_buy')) else "龙虎榜买入额: N/A",
-                f"龙虎榜成交额: {row.get('l_amount', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('l_amount')) else "龙虎榜成交额: N/A",
-                f"龙虎榜净买入额: {row.get('net_amount', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('net_amount')) else "龙虎榜净买入额: N/A",
-                f"龙虎榜净买额占比: {row.get('net_rate', 'N/A'):.2f}%" if pd.notna(row.get('net_rate')) else "龙虎榜净买额占比: N/A",
-                f"龙虎榜成交额占比: {row.get('amount_rate', 'N/A'):.2f}%" if pd.notna(row.get('amount_rate')) else "龙虎榜成交额占比: N/A",
-                f"当日流通市值: {row.get('float_values', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('float_values')) else "当日流通市值: N/A",
-                f"上榜理由: {row.get('reason', 'N/A')}"
-            ]
-            results.append("\n".join(item_details))
-            results.append("------------------------")
-        
+        # Corrected f-string for the results title
+        results = [f"--- {trade_date} {('股票 ' + ts_code + ' ') if ts_code else ''}龙虎榜交易明细 ---"]
+        for _, row in df.iterrows():
+            # Simplified and corrected name_str logic
+            current_ts_code = row.get('ts_code')
+            name_str = row.get('name')
+            if not name_str and current_ts_code:
+                name_str = _get_stock_name(pro, current_ts_code)
+            elif not name_str:
+                name_str = 'N/A'
+            
+            result_line = f"代码: {current_ts_code if current_ts_code else 'N/A'} 名称: {name_str}"
+            if pd.notna(row.get('close')): result_line += f" 收盘价: {row['close']:.2f}"
+            if pd.notna(row.get('pct_chg')): result_line += f" 涨跌幅: {row['pct_chg']:.2f}%"
+            if pd.notna(row.get('turnover_rate')): result_line += f" 换手率: {row['turnover_rate']:.2f}%"
+            if pd.notna(row.get('buy_sm_amount')): result_line += f" 买入总金额(万元): {row['buy_sm_amount']/10000:.2f}"
+            if pd.notna(row.get('sell_sm_amount')): result_line += f" 卖出总金额(万元): {row['sell_sm_amount']/10000:.2f}"
+            if pd.notna(row.get('net_amount')): result_line += f" 净买入额(万元): {row['net_amount']/10000:.2f}"
+            if pd.notna(row.get('exlist_reason')): result_line += f" 上榜原因: {row['exlist_reason']}"
+            results.append(result_line)
+            results.append("-" * 10)
         return "\n".join(results)
-
     except Exception as e:
-        print(f"DEBUG: ERROR in get_top_list_detail for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_top_list_detail: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取龙虎榜数据失败：{str(e)}"
 
 @mcp.tool()
-def get_top_institution_detail(trade_date: str, ts_code: Optional[str] = None) -> str:
+def get_top_institution_detail(trade_date: str, ts_code: str = None) -> str:
     """
     获取龙虎榜机构成交明细。
 
@@ -1602,74 +1434,44 @@ def get_top_institution_detail(trade_date: str, ts_code: Optional[str] = None) -
         trade_date: 交易日期 (YYYYMMDD格式, 必填)
         ts_code: 股票代码 (可选, 例如: 000001.SZ)
     """
-    debug_params = f"trade_date='{trade_date}', ts_code='{ts_code}'"
-    print(f"DEBUG: Tool get_top_institution_detail called with {debug_params}.", file=sys.stderr, flush=True)
-
-    if not get_tushare_token():
-        return "请先配置Tushare token"
-    if not trade_date or not (len(trade_date) == 8 and trade_date.isdigit()):
-        return "错误：请提供有效的 'trade_date' 参数 (YYYYMMDD格式)。"
+    print(f"DEBUG: Tool get_top_institution_detail called with trade_date: '{trade_date}', ts_code: '{ts_code}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    if not trade_date:
+        return "错误：交易日期 (trade_date) 是必需的。"
 
     try:
-        pro = ts.pro_api()
-        
-        api_params = {'trade_date': trade_date}
+        pro = ts.pro_api(token_value)
+        params = {'trade_date': trade_date}
         if ts_code:
-            api_params['ts_code'] = ts_code
-        
-        # Explicitly request all fields mentioned in the documentation
-        req_fields = (
-            'trade_date,ts_code,exalter,side,buy,buy_rate,sell,sell_rate,net_buy,reason'
-        )
-        api_params['fields'] = req_fields
+            params['ts_code'] = ts_code
+        params['fields'] = 'trade_date,ts_code,exalter,buy_turnover,sell_turnover,net_buy_sell,buy_count,sell_count'
+        df = pro.top_inst(**params)
 
-        df_top_inst = pro.top_inst(**api_params)
+        if df.empty:
+            # Corrected f-string for the empty case
+            return f"在 {trade_date} {('的股票 ' + ts_code) if ts_code else ''} 未找到龙虎榜机构成交明细。"
 
-        if df_top_inst.empty:
-            stock_info = f"股票 {ts_code} " if ts_code else ""
-            return f"未找到 {stock_info}在 {trade_date} 的龙虎榜机构成交明细数据。"
-
-        results = [f"--- {trade_date} 龙虎榜机构成交明细 ---"]
-        if ts_code:
-            # Attempt to get stock name for a more descriptive title if ts_code is provided
-            # Note: top_inst itself doesn't return 'name', so we'd need an extra call or rely on user knowing the ts_code.
-            # For simplicity, we'll just use the ts_code in the title here.
-            results = [f"--- 股票 {ts_code} 在 {trade_date} 的龙虎榜机构成交明细 ---"]
-        
-        # Sort by 'exalter' (营业部) then 'side' to group related entries, if multiple entries exist.
-        # Tushare might already sort, but explicit sorting adds robustness.
-        df_top_inst_sorted = df_top_inst.sort_values(by=['exalter', 'side'])
-
-
-        for _, row in df_top_inst_sorted.iterrows():
-            side_desc_map = {
-                '0': "买入金额最大的前5名",
-                '1': "卖出金额最大的前5名"
-            }
-            side_raw = row.get('side')
-            side_description = side_desc_map.get(str(side_raw), f"未知类型 ({side_raw})") if pd.notna(side_raw) else "类型未知"
-
-            item_details = [
-                f"交易日期: {row.get('trade_date', 'N/A')}",
-                f"TS代码: {row.get('ts_code', 'N/A')}",
-                f"营业部名称: {row.get('exalter', 'N/A')}",
-                f"买卖类型: {side_description}",
-                f"买入额: {row.get('buy', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('buy')) else "买入额: N/A",
-                f"买入占总成交比例: {row.get('buy_rate', 'N/A'):.2f}%" if pd.notna(row.get('buy_rate')) else "买入占总成交比例: N/A",
-                f"卖出额: {row.get('sell', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('sell')) else "卖出额: N/A",
-                f"卖出占总成交比例: {row.get('sell_rate', 'N/A'):.2f}%" if pd.notna(row.get('sell_rate')) else "卖出占总成交比例: N/A",
-                f"净买入额: {row.get('net_buy', 0) / 100000000:.4f} 亿元" if pd.notna(row.get('net_buy')) else "净买入额: N/A",
-                f"上榜理由: {row.get('reason', 'N/A')}"
-            ]
-            results.append("\n".join(item_details))
-            results.append("------------------------")
-        
+        # Corrected f-string for the results title
+        results = [f"--- {trade_date} {('股票 ' + ts_code + ' ') if ts_code else ''}龙虎榜机构成交明细 ---"]
+        for _, row in df.iterrows():
+            stock_code_val = row.get('ts_code', 'N/A')
+            stock_name_val = _get_stock_name(pro, stock_code_val) if stock_code_val != 'N/A' else 'N/A'
+            result_line = f"代码: {stock_code_val} 名称: {stock_name_val}"
+            result_line += f" 营业部名称: {row.get('exalter', 'N/A')}" # Corrected f-string potential issue
+            if pd.notna(row.get('buy_turnover')): result_line += f" 买入额(万元): {row['buy_turnover']/10000:.2f}"
+            if pd.notna(row.get('sell_turnover')): result_line += f" 卖出额(万元): {row['sell_turnover']/10000:.2f}"
+            if pd.notna(row.get('net_buy_sell')): result_line += f" 净买卖额(万元): {row['net_buy_sell']/10000:.2f}"
+            if pd.notna(row.get('buy_count')): result_line += f" 买入席位数: {row['buy_count']}"
+            if pd.notna(row.get('sell_count')): result_line += f" 卖出席位数: {row['sell_count']}"
+            results.append(result_line)
+            results.append("-" * 10)
         return "\n".join(results)
-
     except Exception as e:
-        print(f"DEBUG: ERROR in get_top_institution_detail for {debug_params}: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_top_institution_detail: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
-        return f"获取龙虎榜机构明细失败：{str(e)}"
+        return f"获取龙虎榜机构成交明细失败：{str(e)}"
 
 # --- Start of MCP SSE Workaround Integration ---
 # Remove previous mounting attempt:
