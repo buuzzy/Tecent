@@ -768,3 +768,110 @@ async def get_ths_daily_data(
     except Exception as e:
         logger.error(f"Error calling Tushare ths_daily with params {log_params}: {e}", exc_info=True)
         return {"error": f"Error calling Tushare ths_daily: {str(e)}"}
+
+# --- 东方财富概念板块 Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_dc_index",
+    description="获取东方财富每个交易日的概念板块数据。可按代码、名称、日期或日期范围筛选。"
+)
+@app.get("/tools/hotlist_mcp_get_dc_index", summary="获取东方财富概念板块数据", deprecated=False)
+async def get_dc_index(
+    ts_code: str = Query(default="", description="指数代码（支持多个代码同时输入，用逗号分隔） 例如: BK1184.DC"),
+    name: str = Query(default="", description="板块名称（例如：人形机器人）"),
+    trade_date: str = Query(default="", description="交易日期（YYYYMMDD格式） 例如: 20250103"),
+    start_date: str = Query(default="", description="开始日期 (YYYYMMDD格式) 例如: 20250101"),
+    end_date: str = Query(default="", description="结束日期 (YYYYMMDD格式) 例如: 20250131")
+):
+    """
+    获取东方财富每个交易日的概念板块数据。
+    数据来源: [Tushare dc_index](https://tushare.pro/document/2?doc_id=362)
+    权限: 用户积累5000积分可调取。
+    """
+    if not PRO_API_INSTANCE:
+        logger.error("Tushare Pro API uninitialized for get_dc_index.")
+        return {"error": "Tushare Pro API uninitialized. Check token."}
+
+    log_params = f"ts_code='{ts_code}', name='{name}', trade_date='{trade_date}', start_date='{start_date}', end_date='{end_date}'"
+    
+    api_params = {}
+    if ts_code:
+        api_params["ts_code"] = ts_code
+    if name:
+        api_params["name"] = name
+    if trade_date:
+        api_params["trade_date"] = trade_date
+    if start_date:
+        api_params["start_date"] = start_date
+    if end_date:
+        api_params["end_date"] = end_date
+
+    # 至少需要一个有效筛选条件
+    if not any(api_params.values()): # Simpler check: if api_params is empty
+        logger.warning(f"get_dc_index called without any filters: {log_params}")
+        return {"error": "Please provide at least one filter for dc_index (e.g., ts_code, name, trade_date, or start_date/end_date)."}
+    
+    try:
+        logger.info(f"Calling Tushare API dc_index with params: {api_params}") # Log actual params sent
+        df = PRO_API_INSTANCE.dc_index(**api_params)
+
+        if df is None or df.empty:
+            logger.info(f"No data returned from Tushare dc_index for params: {log_params}")
+            return {"results": []}
+            
+        results = df.to_dict(orient="records")
+        logger.info(f"Successfully retrieved {len(results)} records from dc_index for params: {log_params}.")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Error calling Tushare dc_index with params {log_params}: {e}", exc_info=True)
+        if "积分" in str(e) or "credits" in str(e).lower() or "权限" in str(e):
+             return {"error": f"获取东方财富概念板块数据失败：Tushare积分不足或无权限访问此接口 (dc_index 需要5000积分)。({str(e)})"}
+        return {"error": f"Error calling Tushare dc_index: {str(e)}"}
+
+# --- 东方财富板块成分 Tool Definition ---
+@mcp.tool(
+    name="hotlist_mcp_get_dc_members",
+    description="获取东方财富某概念板块的每日成分股数据。须提供板块指数代码。"
+)
+@app.get("/tools/hotlist_mcp_get_dc_members", summary="获取东方财富板块成分股列表", deprecated=False)
+async def get_dc_members(
+    ts_code: str = Query(..., description="板块指数代码, 例如：BK1184.DC (此参数为必需参数)"),
+    trade_date: str = Query(default="", description="交易日期（YYYYMMDD格式）, 例如：20250102 (提供日期以获取特定日成分)"),
+    con_code: str = Query(default="", description="成分股票代码, 例如：002117.SZ (可选，结合ts_code和trade_date筛选特定成分股)")
+):
+    """
+    获取东方财富板块每日成分数据。
+    数据来源: [Tushare dc_member](https://tushare.pro/document/2?doc_id=363)
+    权限: 用户积累5000积分可调取。
+    """
+    if not PRO_API_INSTANCE:
+        logger.error("Tushare Pro API uninitialized for get_dc_members.")
+        return {"error": "Tushare Pro API uninitialized. Check token."}
+    
+    # ts_code is mandatory via Query(...)
+
+    log_params = f"ts_code='{ts_code}', trade_date='{trade_date}', con_code='{con_code}'"
+    
+    api_params = {"ts_code": ts_code} 
+    if trade_date:
+        api_params["trade_date"] = trade_date
+    if con_code:
+        api_params["con_code"] = con_code
+            
+    try:
+        logger.info(f"Calling Tushare API dc_member with params: {api_params}") # Log actual params sent
+        df = PRO_API_INSTANCE.dc_member(**api_params)
+
+        if df is None or df.empty:
+            logger.info(f"No data returned from Tushare dc_member for params: {log_params}")
+            return {"results": []}
+            
+        results = df.to_dict(orient="records")
+        logger.info(f"Successfully retrieved {len(results)} records from dc_member for params: {log_params}.")
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Error calling Tushare dc_member with params {log_params}: {e}", exc_info=True)
+        if "积分" in str(e) or "credits" in str(e).lower() or "权限" in str(e):
+             return {"error": f"获取东方财富板块成分数据失败：Tushare积分不足或无权限访问此接口 (dc_member 需要5000积分)。({str(e)})"}
+        return {"error": f"Error calling Tushare dc_member: {str(e)}"}
+
+# --- End of 东方财富板块成分 Tool Definition ---
