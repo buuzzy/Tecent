@@ -634,9 +634,9 @@ if __name__ == "__main__":
 )
 @app.get("/tools/mcp_hotlist_mcp_get_ths_index_list", summary="获取同花顺板块指数列表", deprecated=False)
 async def get_ths_index_list(
-    ts_code: Optional[str] = Query(default="", description="指数代码,例如：885835.TI"),
-    exchange: Optional[str] = Query(default="", description="市场类型 A-a股 HK-港股 US-美股, 例如：A"),
-    type: Optional[str] = Query(default="", description="指数类型 N-概念指数 I-行业指数 R-地域指数 S-同花顺特色指数 ST-同花顺风格指数 TH-同花顺主题指数 BB-同花顺宽基指数, 例如：N")
+    ts_code: str = Query(default="", description="指数代码,例如：885835.TI"),
+    exchange: str = Query(default="", description="市场类型 A-a股 HK-港股 US-美股, 例如：A"),
+    type: str = Query(default="", description="指数类型 N-概念指数 I-行业指数 R-地域指数 S-同花顺特色指数 ST-同花顺风格指数 TH-同花顺主题指数 BB-同花顺宽基指数, 例如：N")
 ):
     """
     获取同花顺板块指数列表，包括概念指数、行业指数、地域指数等。
@@ -677,8 +677,8 @@ async def get_ths_index_list(
 )
 @app.get("/tools/mcp_hotlist_mcp_get_ths_members", summary="获取同花顺概念板块成分股列表", deprecated=False)
 async def get_ths_members(
-    ts_code: Optional[str] = Query(default="", description="板块指数代码, 例如：885800.TI"),
-    con_code: Optional[str] = Query(default="", description="股票代码, 例如：000001.SZ")
+    ts_code: str = Query(default="", description="板块指数代码, 例如：885800.TI"),
+    con_code: str = Query(default="", description="股票代码, 例如：000001.SZ")
 ):
     """
     获取同花顺概念板块的成分股列表。
@@ -725,10 +725,10 @@ async def get_ths_members(
 )
 @app.get("/tools/mcp_hotlist_mcp_get_ths_daily_data", summary="获取同花顺板块指数每日行情数据", deprecated=False)
 async def get_ths_daily_data(
-    ts_code: Optional[str] = Query(default="", description="指数代码, 例如：865001.TI"),
-    trade_date: Optional[str] = Query(default="", description="交易日期 (YYYYMMDD格式), 例如：20230101"),
-    start_date: Optional[str] = Query(default="", description="开始日期 (YYYYMMDD格式), 例如：20230101"),
-    end_date: Optional[str] = Query(default="", description="结束日期 (YYYYMMDD格式), 例如：20230131")
+    ts_code: str = Query(default="", description="指数代码, 例如：865001.TI"),
+    trade_date: str = Query(default="", description="交易日期 (YYYYMMDD格式), 例如：20230101"),
+    start_date: str = Query(default="", description="开始日期 (YYYYMMDD格式), 例如：20230101"),
+    end_date: str = Query(default="", description="结束日期 (YYYYMMDD格式), 例如：20230131")
 ):
     """
     获取同花顺板块指数的每日行情数据。
