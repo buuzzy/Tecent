@@ -1311,29 +1311,71 @@ def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10)
         return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
     if not period or len(period) != 8 or not period.isdigit():
         return "错误：请提供有效的 'period' 参数 (YYYYMMDD格式)。"
-    if type not in ['P', 'D']:
-        return "错误：'type' 参数必须是 'P' (按产品) 或 'D' (按地区)。"
+    if type not in ['P', 'D', 'I']: # As per Tushare docs, 'I' is also a valid type
+        return "错误：'type' 参数必须是 'P' (按产品), 'D' (按地区) 或 'I' (按行业)。"
 
     try:
         pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
-        df = pro.fina_mainbz(ts_code=ts_code, period=period, type=type, fields='ts_code,end_date,bz_item,bz_amount,bz_ratio,bz_type')
+        # Corrected fields based on Tushare documentation
+        requested_fields = 'ts_code,end_date,bz_item,bz_sales,bz_profit,bz_cost,curr_type,update_flag'
+        df = pro.fina_mainbz(ts_code=ts_code, period=period, type=type, fields=requested_fields)
+        
         if df.empty:
-            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period} 的主营业务构成数据。"
+            return f"未找到 {stock_name} ({ts_code}) 在报告期 {period}，类型 {type} 的主营业务构成数据。"
 
-        results = [f"--- {stock_name} ({ts_code}) 主营业务构成 ---"]
-        for _, row in df.iterrows():
-            results.append(f"业务项目: {row['bz_item']}")
-            results.append(f"营业收入: {row['bz_amount'] / 100000000:.4f} 亿元")
-            results.append(f"营业利润: {row['bz_amount'] / 100000000:.4f} 亿元")
-            results.append(f"营业成本: {row['bz_amount'] / 100000000:.4f} 亿元")
-            results.append(f"币种: {row['bz_type']}")
+        results = [f"--- {stock_name} ({ts_code}) 主营业务构成 ({type}类型, 报告期 {period}) ---"]
+        
+        # Calculate total sales for percentage calculation if data is available
+        total_sales = None
+        if 'bz_sales' in df.columns and df['bz_sales'].notna().any():
+            # Ensure only numeric types are summed, convert errors to NaN then sum (ignoring NaNs)
+            total_sales = pd.to_numeric(df['bz_sales'], errors='coerce').sum()
+            if total_sales == 0: # Avoid division by zero if total sales are legitimately zero
+                total_sales = None 
+
+
+        limited_df = df.head(limit)
+
+        for _, row in limited_df.iterrows():
+            results.append(f"业务项目: {row.get('bz_item', 'N/A')}")
+            
+            bz_sales_val = pd.to_numeric(row.get('bz_sales'), errors='coerce')
+            if pd.notna(bz_sales_val):
+                results.append(f"主营业务收入: {bz_sales_val / 100000000:.4f} 亿元")
+                if total_sales and total_sales != 0: # Check total_sales again to be safe
+                    ratio = (bz_sales_val / total_sales) * 100
+                    results.append(f"收入占比: {ratio:.2f}%")
+                else:
+                    results.append("收入占比: N/A (无法计算总收入或总收入为0)")
+            else:
+                results.append("主营业务收入: N/A")
+                results.append("收入占比: N/A")
+
+            bz_profit_val = pd.to_numeric(row.get('bz_profit'), errors='coerce')
+            if pd.notna(bz_profit_val):
+                results.append(f"主营业务利润: {bz_profit_val / 100000000:.4f} 亿元")
+            else:
+                results.append("主营业务利润: N/A")
+            
+            bz_cost_val = pd.to_numeric(row.get('bz_cost'), errors='coerce')
+            if pd.notna(bz_cost_val):
+                results.append(f"主营业务成本: {bz_cost_val / 100000000:.4f} 亿元")
+            else:
+                results.append("主营业务成本: N/A")
+                
+            results.append(f"货币代码: {row.get('curr_type', 'N/A')}")
+            results.append(f"更新标识: {row.get('update_flag', 'N/A')}")
             results.append("------------------------")
-        return "\n".join(results)
+        
+        if len(df) > limit:
+            results.append(f"注意: 数据超过 {limit} 条，仅显示前 {limit} 条。")
+            
+        return "\\n".join(results)
     except Exception as e:
-        print(f"DEBUG: ERROR in get_fina_mainbz: {str(e)}", file=sys.stderr, flush=True)
+        print(f"DEBUG: ERROR in get_fina_mainbz for ts_code={ts_code}, period={period}, type={type}: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
-        return f"获取主营业务构成失败: {str(e)}"
+        return f"获取主营业务构成失败：{str(e)}"
 
 @mcp.tool()
 def get_fina_audit(ts_code: str, period: str) -> str:
