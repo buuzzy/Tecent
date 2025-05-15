@@ -127,7 +127,7 @@ async def health_check():
 async def get_stock_basic_info_api(
     ts_code: Optional[str] = Query(None, description="股票代码 (例如: 000001.SZ)"),
     name: Optional[str] = Query(None, description="股票名称 (例如: 平安银行)")
-) -> Any:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not (ts_code or name):
         raise HTTPException(status_code=400, detail="Either 'ts_code' or 'name' query parameter must be provided.")
@@ -138,21 +138,19 @@ async def get_stock_basic_info_api(
         if name:
             filters['name'] = name
         
-        # Specify fields to match the typical output of the original tool
         fields = 'ts_code,name,area,industry,fullname,enname,market,exchange,curr_type,list_status,list_date,delist_date,is_hs'
         df = pro.stock_basic(**filters, fields=fields)
         
-        processed_output = handle_df_output(df)
+        if df.empty:
+            return {}
 
-        # If ts_code was provided (implying a single expected result) and we got a result (non-empty list),
-        # return the single object.
-        # Otherwise, return the list (which could be empty or contain multiple items if queried by name,
-        # or if queried by a ts_code that somehow returns multiple distinct entries - though less common for stock_basic).
-        if ts_code and processed_output:
-            return processed_output[0] # Return the first (and likely only) object
-        
-        return processed_output # Return the list (potentially empty or with multiple items)
+        processed_output_list = handle_df_output(df)
 
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
+            
     except Exception as e:
         print(f"ERROR in get_stock_basic_info_api: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -165,8 +163,8 @@ async def get_financial_indicator_api(
     ann_date: Optional[str] = Query(None, description="公告日期 (YYYYMMDD格式)"),
     start_date: Optional[str] = Query(None, description="公告开始日期 (YYYYMMDD格式)"),
     end_date: Optional[str] = Query(None, description="公告结束日期 (YYYYMMDD格式)"),
-    limit: int = Query(10, description="返回记录的条数上限", ge=1, le=100) # Added sensible limits
-) -> List[Dict[str, Any]]:
+    limit: int = Query(10, description="返回记录的条数上限", ge=1, le=100)
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not (period or ann_date or (start_date and end_date)):
         raise HTTPException(status_code=400, detail="Must provide 'period', 'ann_date', or both 'start_date' and 'end_date'.")
@@ -193,11 +191,16 @@ async def get_financial_indicator_api(
         
         df = pro.fina_indicator(**api_params)
         if df.empty:
-            return []
+            return {}
         
         df_sorted = df.sort_values(by=['end_date', 'ann_date'], ascending=[False, False])
         df_limited = df_sorted.head(limit)
-        return handle_df_output(df_limited)
+        processed_output_list = handle_df_output(df_limited)
+        
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
 
     except Exception as e:
         print(f"ERROR in get_financial_indicator_api: {str(e)}", file=sys.stderr, flush=True)
@@ -223,7 +226,7 @@ async def get_income_statement_api(
         df_current = pro.income(ts_code=ts_code, period=period, report_type=report_type, fields=current_fields)
         
         if df_current.empty:
-            raise HTTPException(status_code=404, detail=f"No income statement data found for {ts_code} for period {period}.")
+            return {}
         
         current_data_dict = handle_df_output(df_current.head(1))[0] # Should be one record for specific period
 
@@ -292,7 +295,7 @@ async def get_income_statement_api(
 async def get_top_list_detail_api(
     trade_date: str = Query(..., description="交易日期 (YYYYMMDD格式)"),
     ts_code: Optional[str] = Query(None, description="股票代码 (可选, 例如: 000001.SZ)")
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         params = {'trade_date': trade_date}
@@ -303,6 +306,9 @@ async def get_top_list_detail_api(
         fields = 'trade_date,ts_code,name,close,pct_chg,turnover_rate,amount,l_sell,l_buy,l_amount,buy_sm_amount,sell_sm_amount,net_amount,exlist_reason'
         df = pro.top_list(**params, fields=fields) # Tushare's top_list
         
+        if df.empty:
+            return {}
+
         # Post-processing: get stock names if 'name' column is missing or incomplete for some ts_codes
         # (Tushare's top_list usually provides 'name', but as a fallback)
         if not df.empty and 'name' in df.columns:
@@ -312,7 +318,11 @@ async def get_top_list_detail_api(
             # df['name'] = df.apply(lambda row: imported_get_stock_name(pro, row['ts_code']) if pd.isna(row['name']) or row['name'] == '' else row['name'], axis=1)
             pass # Assuming pro.top_list provides the name
 
-        return handle_df_output(df)
+        processed_output_list = handle_df_output(df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
         
     except Exception as e:
         print(f"ERROR in get_top_list_detail_api: {str(e)}", file=sys.stderr, flush=True)
@@ -326,7 +336,7 @@ async def search_index_api(
     publisher: Optional[str] = Query(None, description="发布商 (可选, 例如: \\\"中证公司\\\", \\\"申万\\\", \\\"MSCI\\\")"),
     category: Optional[str] = Query(None, description="指数类别 (可选, 例如: \\\"规模指数\\\", \\\"行业指数\\\")"),
     limit: int = Query(20, description="返回记录的条数上限", ge=1, le=100)
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         query_params = {
@@ -342,10 +352,14 @@ async def search_index_api(
         
         df = pro.index_basic(**query_params)
         if df.empty:
-            return []
+            return {}
         
         df_sorted = df.sort_values(by=['market', 'list_date', 'ts_code'], ascending=[True, False, True]).head(limit)
-        return handle_df_output(df_sorted)
+        processed_output_list = handle_df_output(df_sorted)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
         
     except Exception as e:
         print(f"ERROR in search_index_api for '{index_name}': {str(e)}", file=sys.stderr, flush=True)
@@ -360,7 +374,7 @@ async def get_index_list_api(
     publisher: Optional[str] = Query(None, description="发布商 (可选, 例如: \\\"中证公司\\\", \\\"申万\\\", \\\"MSCI\\\")"),
     category: Optional[str] = Query(None, description="指数类别 (可选, 例如: \\\"规模指数\\\", \\\"行业指数\\\")"),
     limit: int = Query(30, description="返回记录的条数上限", ge=1, le=200)
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not any([ts_code, name, market, publisher, category]):
         raise HTTPException(status_code=400, detail="At least one query parameter (ts_code, name, market, publisher, or category) must be provided.")
@@ -377,10 +391,14 @@ async def get_index_list_api(
         
         df = pro.index_basic(**query_params)
         if df.empty:
-            return []
+            return {}
 
         df_sorted = df.sort_values(by=['market', 'list_date', 'ts_code'], ascending=[True, False, True]).head(limit)
-        return handle_df_output(df_sorted)
+        processed_output_list = handle_df_output(df_sorted)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
 
     except Exception as e:
         error_msg_detail = f"ts_code={ts_code}, name={name}, market={market}, publisher={publisher}, category={category}"
@@ -392,7 +410,7 @@ async def get_index_list_api(
 async def search_stocks_api(
     keyword: str = Query(..., description="关键词（可以是股票代码的一部分或股票名称的一部分）"),
     limit: int = Query(50, description="返回记录的条数上限", ge=1, le=200)
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         # stock_basic can return many fields, let's select a few relevant ones
@@ -404,7 +422,14 @@ async def search_stocks_api(
         ) # Also search by symbol
         
         results_df = df_all[mask].head(limit)
-        return handle_df_output(results_df)
+        if results_df.empty:
+            return {}
+
+        processed_output_list = handle_df_output(results_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
     except Exception as e:
         print(f"ERROR in search_stocks_api for keyword '{keyword}': {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -414,7 +439,7 @@ async def search_stocks_api(
 async def get_daily_metrics_api(
     ts_code: str = Query(..., description="股票代码 (例如: 300170.SZ)"),
     trade_date: str = Query(..., description="交易日期 (YYYYMMDD格式, 例如: 20240421)")
-) -> Optional[Dict[str, Any]]: # Returns a single day's metrics, so one dict or null
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         # Fields from original tool + a few more potentially useful ones like free_share
@@ -423,12 +448,11 @@ async def get_daily_metrics_api(
         df = pro.daily_basic(ts_code=ts_code, trade_date=trade_date, fields=fields)
         
         if df.empty:
-            # Return 404 if no data for that specific stock and date
-            raise HTTPException(status_code=404, detail=f"No daily metrics found for {ts_code} on {trade_date}.")
+            return {}
             
         # Should be a single row
         result_list = handle_df_output(df)
-        return result_list[0] if result_list else None # Should not be None if not empty, but good practice
+        return result_list[0] if result_list else {}
         
     except HTTPException: # Re-raise
         raise
@@ -441,17 +465,17 @@ async def get_daily_metrics_api(
 async def get_daily_prices_api(
     ts_code: str = Query(..., description="股票代码 (例如: 600126.SH)"),
     trade_date: str = Query(..., description="交易日期 (YYYYMMDD格式, 例如: 20250227)")
-) -> Optional[Dict[str, Any]]: # Single day's prices
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         fields = 'ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount'
         df = pro.daily(ts_code=ts_code, trade_date=trade_date, fields=fields)
         
         if df.empty:
-            raise HTTPException(status_code=404, detail=f"No daily price data found for {ts_code} on {trade_date}.")
+            return {}
         
         result_list = handle_df_output(df)
-        return result_list[0] if result_list else None
+        return result_list[0] if result_list else {}
 
     except HTTPException: # Re-raise
         raise
@@ -468,7 +492,7 @@ async def get_shareholder_count_api(
     # For a direct API, making it mandatory for a specific period is often clearer.
     # If latest is desired, the client can determine current date or leave it to Tushare if API supports empty end_date for latest.
     # Tushare's stk_holdernumber typically requires enddate.
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         # The original tool used _fetch_latest_report_data. We can mimic its core goal:
@@ -482,14 +506,14 @@ async def get_shareholder_count_api(
         df_holder = pro.stk_holdernumber(**params)
 
         if df_holder.empty:
-            raise HTTPException(status_code=404, detail=f"No shareholder count data found for {ts_code} on {end_date}.")
+            return {}
 
         # Sort by ann_date (desc) to get the latest announcement for the given end_date
         df_holder_sorted = df_holder.sort_values(by='ann_date', ascending=False)
         latest_data_for_period = df_holder_sorted.head(1)
         
         result_list = handle_df_output(latest_data_for_period)
-        return result_list[0] if result_list else None
+        return result_list[0] if result_list else {}
 
     except HTTPException: # Re-raise
         raise
@@ -502,7 +526,7 @@ async def get_shareholder_count_api(
 async def get_daily_basic_info_api(
     ts_code: str = Query(..., description="股票代码 (例如: 000665.SZ)"),
     trade_date: str = Query(..., description="交易日期 (YYYYMMDD, 例如: 20240930)")
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         # Fields from original tool in server.py, plus a few common ones
@@ -511,10 +535,10 @@ async def get_daily_basic_info_api(
         df = pro.daily_basic(ts_code=ts_code, trade_date=trade_date, fields=fields)
         
         if df.empty:
-            raise HTTPException(status_code=404, detail=f"No daily basic info found for {ts_code} on {trade_date}.")
+            return {}
         
         result_list = handle_df_output(df)
-        return result_list[0] if result_list else None
+        return result_list[0] if result_list else {}
 
     except HTTPException: # Re-raise
         raise
@@ -528,7 +552,7 @@ async def get_top_holders_api(
     ts_code: str = Query(..., description="股票代码 (例如: 000665.SZ)"),
     period: str = Query(..., description="报告期 (YYYYMMDD, 例如: 20240930)"),
     holder_type: str = Query('H', description="股东类型 ('H'=前十大股东, 'F'=前十大流通股东)", pattern="^(H|F)$")
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not period or len(period) != 8 or not period.isdigit(): # Basic validation
         raise HTTPException(status_code=400, detail="Invalid 'period' format. Expected YYYYMMDD.")
@@ -540,9 +564,14 @@ async def get_top_holders_api(
         df = api_to_call(ts_code=ts_code, period=period, fields=fields)
         
         if df.empty:
-            return [] # Or raise 404 if preferred: HTTPException(status_code=404, detail=f"No top {holder_type} holders data found for {ts_code} for period {period}.")
+            return {}
 
-        return handle_df_output(df.sort_values(by='hold_ratio', ascending=False)) # Sort by holding ratio
+        sorted_df = df.sort_values(by='hold_ratio', ascending=False)
+        processed_output_list = handle_df_output(sorted_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
 
     except Exception as e:
         print(f"ERROR in get_top_holders_api for {ts_code}, period {period}, type {holder_type}: {str(e)}", file=sys.stderr, flush=True)
@@ -556,7 +585,7 @@ async def get_index_constituents_api(
     trade_date: Optional[str] = Query(None, description="交易日期 (YYYYMMDD)，将用于确定月份。如果提供，将覆盖start/end_date。查询当月数据。"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYYMMDD格式, 例如: 20230901 for Sept data). Required if trade_date is not set."),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYYMMDD格式, 例如: 20230930 for Sept data). Required if trade_date is not set.")
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     
     query_params = {'index_code': index_code, 'fields': 'index_code,con_code,trade_date,weight'}
@@ -594,7 +623,7 @@ async def get_index_constituents_api(
         # If multiple dates are returned, the client might want the latest or all.
         # For now, return all found within the specified range/date.
         if df.empty:
-            return []
+            return {}
         
         # Add stock names
         # Create a unique list of con_codes to minimize calls to stock_basic
@@ -608,7 +637,12 @@ async def get_index_constituents_api(
         #         df.drop(columns=['ts_code_y'], inplace=True, errors='ignore') # Drop extra ts_code from merge
         #         df.rename(columns={'ts_code_x': 'ts_code'}, inplace=True, errors='ignore')
 
-        return handle_df_output(df.sort_values(by=['trade_date', 'weight'], ascending=[False, False]))
+        sorted_df = df.sort_values(by=['trade_date', 'weight'], ascending=[False, False])
+        processed_output_list = handle_df_output(sorted_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
 
     except Exception as e:
         print(f"ERROR in get_index_constituents_api for {index_code}: {str(e)}", file=sys.stderr, flush=True)
@@ -621,7 +655,7 @@ async def get_global_index_quotes_api(
     start_date: Optional[str] = Query(None, description="开始日期 (YYYYMMDD格式)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYYMMDD格式)"),
     trade_date: Optional[str] = Query(None, description="单个交易日期 (YYYYMMDD格式)")
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not trade_date and not (start_date and end_date):
         raise HTTPException(status_code=400, detail="Either 'trade_date' or both 'start_date' and 'end_date' must be provided.")
@@ -641,9 +675,14 @@ async def get_global_index_quotes_api(
         
         df = pro.index_global(**params)
         if df.empty:
-            return []
+            return {}
         
-        return handle_df_output(df.sort_values(by='trade_date', ascending=True))
+        sorted_df = df.sort_values(by='trade_date', ascending=True)
+        processed_output_list = handle_df_output(sorted_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
 
     except Exception as e:
         print(f"ERROR in get_global_index_quotes_api for {ts_code}: {str(e)}", file=sys.stderr, flush=True)
@@ -662,7 +701,7 @@ async def get_period_price_change_api(
         df_daily = pro.daily(ts_code=ts_code, start_date=start_date, end_date=end_date, fields='trade_date,close')
 
         if df_daily.empty or len(df_daily) < 1: # Need at least one day to get a price
-            raise HTTPException(status_code=404, detail=f"No daily data found for {ts_code} in the range {start_date} to {end_date}.")
+            return {}
 
         # Data is typically returned in descending order of trade_date
         actual_end_trade_date = df_daily['trade_date'].iloc[0]
@@ -702,7 +741,7 @@ async def get_balance_sheet_api(
     period: str = Query(..., description="报告期 (YYYYMMDD格式, 例如: 20231231)"),
     # report_type: Optional[str] = Query(None, description="报告类型 (1合并报表 2单季合并 3调整单季合并表等)"), # Tushare balancesheet has report_type
     # comp_type: Optional[str] = Query(None, description="公司类型 (1一般工商业 2银行 3保险 4券商)") # Tushare balancesheet has comp_type
-) -> Optional[Dict[str, Any]]: # Usually one report for a specific period
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not (len(period) == 8 and period.isdigit()):
         raise HTTPException(status_code=400, detail="Invalid 'period' format. Expected YYYYMMDD.")
@@ -727,10 +766,10 @@ async def get_balance_sheet_api(
         )
 
         if df_bs is None or df_bs.empty:
-            raise HTTPException(status_code=404, detail=f"No balance sheet data found for {ts_code} for period {period}.")
+            return {}
 
         result_list = handle_df_output(df_bs.head(1)) # Should be one row
-        return result_list[0] if result_list else None
+        return result_list[0] if result_list else {}
     except HTTPException: # Re-raise
         raise
     except Exception as e:
@@ -743,7 +782,7 @@ async def get_cash_flow_api(
     ts_code: str = Query(..., description="股票代码 (例如: 300274.SZ)"),
     period: str = Query(..., description="报告期 (YYYYMMDD格式, 例如: 20231231)")
     # report_type, comp_type can be added similarly if needed
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not (len(period) == 8 and period.isdigit()):
         raise HTTPException(status_code=400, detail="Invalid 'period' format. Expected YYYYMMDD.")
@@ -763,10 +802,10 @@ async def get_cash_flow_api(
         )
 
         if df_cf is None or df_cf.empty:
-            raise HTTPException(status_code=404, detail=f"No cash flow data found for {ts_code} for period {period}.")
+            return {}
         
         result_list = handle_df_output(df_cf.head(1))
-        return result_list[0] if result_list else None
+        return result_list[0] if result_list else {}
     except HTTPException: # Re-raise
         raise
     except Exception as e:
@@ -781,7 +820,7 @@ async def get_pledge_detail_api(
     # The original tool did not take date params either. It returns a list of pledge stats over time.
     # Let's align with Tushare API `pledge_stat` which returns stats per end_date.
     end_date: Optional[str] = Query(None, description="截止日期 (YYYYMMDD, 可选, 某些接口可能按最新返回)") 
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         api_params = {'ts_code': ts_code, 'fields': 'ts_code,end_date,pledge_count,unrest_pledge,rest_pledge,total_share,pledge_ratio'}
@@ -792,8 +831,13 @@ async def get_pledge_detail_api(
             
         df = pro.pledge_stat(**api_params) # Using pledge_stat as in original server.py
         if df.empty:
-            return []
-        return handle_df_output(df.sort_values(by='end_date', ascending=False))
+            return {}
+        sorted_df = df.sort_values(by='end_date', ascending=False)
+        processed_output_list = handle_df_output(sorted_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
     except Exception as e:
         print(f"ERROR in get_pledge_detail_api for {ts_code}: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -805,7 +849,7 @@ async def get_fina_mainbz_api(
     period: str = Query(..., description="报告期 (YYYYMMDD格式, 例如: 20231231)"),
     type: str = Query('P', description="构成类型 ('P'按产品, 'D'按地区, 'I'按行业)", pattern="^(P|D|I)$"),
     limit: int = Query(10, description="返回记录的条数上限", ge=1, le=50)
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not (len(period) == 8 and period.isdigit()):
         raise HTTPException(status_code=400, detail="Invalid 'period' format. Expected YYYYMMDD.")
@@ -814,12 +858,17 @@ async def get_fina_mainbz_api(
         df = pro.fina_mainbz(ts_code=ts_code, period=period, type=type, fields=req_fields)
         
         if df.empty:
-            return []
+            return {}
         
         # The original tool had logic to calculate total_sales and ratio, which is good for context.
         # We can add this back if this API is meant to be more directly consumable with such derived fields.
         # For now, returning raw data sorted and limited.
-        return handle_df_output(df.head(limit)) # Original server.py did not sort this one explicitly
+        limited_df = df.head(limit) # Keep limit for initial data processing
+        processed_output_list = handle_df_output(limited_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
 
     except Exception as e:
         print(f"ERROR in get_fina_mainbz_api for {ts_code}, period {period}, type {type}: {str(e)}", file=sys.stderr, flush=True)
@@ -830,7 +879,7 @@ async def get_fina_mainbz_api(
 async def get_fina_audit_api(
     ts_code: str = Query(..., description="股票代码 (例如: 000001.SZ)"),
     period: str = Query(..., description="报告期 (YYYYMMDD格式, 例如: 20231231)")
-) -> List[Dict[str, Any]]: # Tushare fina_audit can return multiple rows if there are multiple announcements/versions
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     if not (len(period) == 8 and period.isdigit()):
         raise HTTPException(status_code=400, detail="Invalid 'period' format. Expected YYYYMMDD.")
@@ -840,8 +889,13 @@ async def get_fina_audit_api(
         req_fields = 'ts_code,ann_date,end_date,audit_result,audit_agency,audit_sign'
         df = pro.fina_audit(ts_code=ts_code, period=period, fields=req_fields)
         if df.empty:
-            return []
-        return handle_df_output(df.sort_values(by='ann_date', ascending=False))
+            return {}
+        sorted_df = df.sort_values(by='ann_date', ascending=False)
+        processed_output_list = handle_df_output(sorted_df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
     except Exception as e:
         print(f"ERROR in get_fina_audit_api for {ts_code}, period {period}: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -851,7 +905,7 @@ async def get_fina_audit_api(
 async def get_top_institution_detail_api(
     trade_date: str = Query(..., description="交易日期 (YYYYMMDD格式)"),
     ts_code: Optional[str] = Query(None, description="股票代码 (可选, 例如: 000001.SZ)")
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     pro = initialize_pro_api()
     try:
         params = {'trade_date': trade_date}
@@ -867,7 +921,14 @@ async def get_top_institution_detail_api(
             # df['name'] = df['ts_code'].apply(lambda x: imported_get_stock_name(pro, x) if pd.notna(x) else None)
             pass # For now, client can lookup name based on ts_code if needed.
 
-        return handle_df_output(df)
+        if df.empty:
+            return {}
+
+        processed_output_list = handle_df_output(df)
+        if processed_output_list:
+            return processed_output_list[0]
+        else:
+            return {}
         
     except Exception as e:
         print(f"ERROR in get_top_institution_detail_api for {trade_date}, ts_code {ts_code}: {str(e)}", file=sys.stderr, flush=True)
