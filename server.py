@@ -1317,7 +1317,6 @@ def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10)
     try:
         pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
-        # Corrected fields based on Tushare documentation
         requested_fields = 'ts_code,end_date,bz_item,bz_sales,bz_profit,bz_cost,curr_type,update_flag'
         df = pro.fina_mainbz(ts_code=ts_code, period=period, type=type, fields=requested_fields)
         
@@ -1326,15 +1325,17 @@ def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10)
 
         results = [f"--- {stock_name} ({ts_code}) 主营业务构成 ({type}类型, 报告期 {period}) ---"]
         
-        # Calculate total sales for percentage calculation if data is available
         total_sales = None
         if 'bz_sales' in df.columns and df['bz_sales'].notna().any():
-            # Ensure only numeric types are summed, convert errors to NaN then sum (ignoring NaNs)
-            total_sales = pd.to_numeric(df['bz_sales'], errors='coerce').sum()
-            if total_sales == 0: # Avoid division by zero if total sales are legitimately zero
+            # Drop duplicates based on 'bz_item' before calculating total_sales to avoid double counting
+            # Keep the first occurrence if items are duplicated by Tushare for some reason
+            unique_items_df = df.drop_duplicates(subset=['bz_item'], keep='first').copy() # Use .copy() to avoid SettingWithCopyWarning
+            unique_items_df.loc[:, 'bz_sales_numeric'] = pd.to_numeric(unique_items_df['bz_sales'], errors='coerce')
+            total_sales = unique_items_df['bz_sales_numeric'].sum()
+            if total_sales == 0: 
                 total_sales = None 
 
-
+        # Display based on the original df (which might have duplicates from Tushare) but limit rows
         limited_df = df.head(limit)
 
         for _, row in limited_df.iterrows():
@@ -1343,11 +1344,11 @@ def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10)
             bz_sales_val = pd.to_numeric(row.get('bz_sales'), errors='coerce')
             if pd.notna(bz_sales_val):
                 results.append(f"主营业务收入: {bz_sales_val / 100000000:.4f} 亿元")
-                if total_sales and total_sales != 0: # Check total_sales again to be safe
+                if total_sales and total_sales != 0: 
                     ratio = (bz_sales_val / total_sales) * 100
                     results.append(f"收入占比: {ratio:.2f}%")
                 else:
-                    results.append("收入占比: N/A (无法计算总收入或总收入为0)")
+                    results.append("收入占比: N/A (总收入为0或无法计算)") # Refined message
             else:
                 results.append("主营业务收入: N/A")
                 results.append("收入占比: N/A")
@@ -1369,7 +1370,7 @@ def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10)
             results.append("------------------------")
         
         if len(df) > limit:
-            results.append(f"注意: 数据超过 {limit} 条，仅显示前 {limit} 条。")
+            results.append(f"注意: 数据超过 {limit} 条，仅显示前 {limit} 条。原始数据可能包含重复项，占比基于去重后总收入计算。")
             
         return "\\n".join(results)
     except Exception as e:
