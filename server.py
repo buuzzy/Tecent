@@ -238,15 +238,26 @@ def check_token_status() -> str:
     if not token:
         print("DEBUG: check_token_status: No token found by get_tushare_token.", file=sys.stderr, flush=True)
         return "未配置Tushare token。请使用configure_token提示来设置您的token。"
+
+    # **** MODIFICATION FOR DIAGNOSIS ****
+    print(f"DEBUG: check_token_status: Token value from get_tushare_token() is '[{token}]'", file=sys.stderr, flush=True)
+    # ***********************************
+
     try:
-        print("DEBUG: check_token_status attempting ts.pro_api() call.", file=sys.stderr, flush=True)
-        ts.pro_api()
-        print("DEBUG: check_token_status ts.pro_api() call successful.", file=sys.stderr, flush=True)
+        # **** MODIFICATION FOR DIAGNOSIS ****
+        print("DEBUG: check_token_status attempting ts.pro_api(token) call with EXPLICIT token.", file=sys.stderr, flush=True)
+        ts.pro_api(token) # Pass the retrieved token explicitly
+        # ***********************************
+        print("DEBUG: check_token_status ts.pro_api(token) call successful.", file=sys.stderr, flush=True)
         return "Token配置正常，可以使用Tushare API。"
     except Exception as e:
-        print(f"DEBUG: ERROR in check_token_status: {str(e)}", file=sys.stderr, flush=True)
+        # **** MODIFICATION FOR DIAGNOSIS ****
+        print(f"DEBUG: ERROR in check_token_status (with explicit token from get_tushare_token): {str(e)}", file=sys.stderr, flush=True)
+        # ***********************************
         traceback.print_exc(file=sys.stderr)
-        return f"Token无效或已过期：{str(e)}"
+        # **** MODIFICATION FOR DIAGNOSIS ****
+        return f"Token无效或已过期 (tried with explicit token '{token[:5]}...'): {str(e)}"
+        # ***********************************
 
 @mcp.tool()
 def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
