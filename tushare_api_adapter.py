@@ -114,6 +114,13 @@ def handle_df_output(df: pd.DataFrame) -> List[Dict[str, Any]]:
     # Replace Pandas NaT/NaN with None for JSON compatibility
     return df.fillna(pd.NA).replace({pd.NA: None}).to_dict(orient='records')
 
+@app_adapter.get("/", summary="Health Check", include_in_schema=False)
+async def health_check():
+    """
+    Simple health check endpoint for Render.
+    """
+    return {"status": "healthy", "message": "Tushare API Adapter is running."}
+
 # --- API Endpoints ---
 
 @app_adapter.get("/stock/basic_info", summary="Get Stock Basic Information")
