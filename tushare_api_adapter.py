@@ -127,7 +127,7 @@ async def health_check():
 async def get_stock_basic_info_api(
     ts_code: Optional[str] = Query(None, description="股票代码 (例如: 000001.SZ)"),
     name: Optional[str] = Query(None, description="股票名称 (例如: 平安银行)")
-) -> List[Dict[str, Any]]:
+) -> Any:
     pro = initialize_pro_api()
     if not (ts_code or name):
         raise HTTPException(status_code=400, detail="Either 'ts_code' or 'name' query parameter must be provided.")
@@ -141,7 +141,18 @@ async def get_stock_basic_info_api(
         # Specify fields to match the typical output of the original tool
         fields = 'ts_code,name,area,industry,fullname,enname,market,exchange,curr_type,list_status,list_date,delist_date,is_hs'
         df = pro.stock_basic(**filters, fields=fields)
-        return handle_df_output(df)
+        
+        processed_output = handle_df_output(df)
+
+        # If ts_code was provided (implying a single expected result) and we got a result (non-empty list),
+        # return the single object.
+        # Otherwise, return the list (which could be empty or contain multiple items if queried by name,
+        # or if queried by a ts_code that somehow returns multiple distinct entries - though less common for stock_basic).
+        if ts_code and processed_output:
+            return processed_output[0] # Return the first (and likely only) object
+        
+        return processed_output # Return the list (potentially empty or with multiple items)
+
     except Exception as e:
         print(f"ERROR in get_stock_basic_info_api: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
