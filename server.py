@@ -321,6 +321,66 @@ def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
         return f"查询失败：{str(e)}"
 
 @mcp.tool()
+def get_hk_stock_basic(ts_code: str = None, list_status: str = 'L') -> str:
+    """
+    获取港股列表基本信息。
+
+    参数:
+        ts_code: 股票代码 (可选, 例如: 00700.HK)
+        list_status: 上市状态 (可选, 'L'上市, 'D'退市, 'P'暂停上市。默认为'L')
+    """
+    print(f"DEBUG: Tool get_hk_stock_basic called with ts_code: '{ts_code}', list_status: '{list_status}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    
+    try:
+        pro = ts.pro_api(token_value)
+        query_params = {'list_status': list_status}
+        if ts_code:
+            query_params['ts_code'] = ts_code
+        
+        # Define the fields to retrieve based on the user's request
+        fields_to_get = 'ts_code,name,fullname,enname,cn_spell,market,list_status,list_date,delist_date,trade_unit,isin,curr_type'
+        query_params['fields'] = fields_to_get
+
+        df = pro.hk_basic(**query_params)
+
+        if df.empty:
+            return f"未找到符合条件的港股列表数据 (list_status='{list_status}')."
+
+        results = [f"--- 港股列表查询结果 (状态: {list_status}) ---"]
+        # Limit results to avoid overly long output, e.g., top 30 matches
+        df_limited = df.head(30)
+
+        for _, row in df_limited.iterrows():
+            info_parts = [
+                f"TS代码: {row.get('ts_code', 'N/A')}",
+                f"股票简称: {row.get('name', 'N/A')}",
+                f"公司全称: {row.get('fullname', 'N/A')}",
+                f"英文名称: {row.get('enname', 'N/A')}",
+                f"市场类别: {row.get('market', 'N/A')}",
+                f"上市状态: {row.get('list_status', 'N/A')}",
+                f"上市日期: {row.get('list_date', 'N/A')}",
+                f"退市日期: {row.get('delist_date', 'N/A') if pd.notna(row.get('delist_date')) else 'N/A'}",
+                f"交易单位: {row.get('trade_unit', 'N/A')}",
+                f"ISIN代码: {row.get('isin', 'N/A')}",
+                f"货币代码: {row.get('curr_type', 'N/A')}"
+            ]
+            results.append("\n".join(info_parts))
+            results.append("------------------------")
+        
+        if len(df) > 30:
+            results.append(f"注意: 结果超过30条，仅显示前30条。如果需要查找特定股票，请提供 ts_code。")
+
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_hk_stock_basic for ts_code='{ts_code}', list_status='{list_status}': {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取港股列表失败: {str(e)}"
+
+@mcp.tool()
 def search_index(index_name: str, market: str = None, publisher: str = None, category: str = None) -> str:
     """
     根据指数名称搜索指数的基本信息，用于查找指数的TS代码。
