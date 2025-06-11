@@ -41,6 +41,11 @@
 [👉使用 cherry studio 快速体验教程](https://doc.weixin.qq.com/doc/w3_AbQAFgbhALUCN01st0nWWQfyyiN0f?scode=AJEAIQdfAAo9jULS9NAbQAFgbhALU)
 
 ## 20250515 更新
+**支持基础的港股股票查询**
+
+删除多余的测试文件
+
+## 20250515 更新
 **新增 `hotlist.py`，一个强大的工具模块，专注于热点榜单追踪与深度题材挖掘！**
 
 通过 `hotlist.py`，您可以轻松实现：
