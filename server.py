@@ -674,31 +674,28 @@ def get_daily_prices(ts_code: str, trade_date: str = None, start_date: str = Non
 @mcp.tool()
 def get_financial_indicator(
     ts_code: str, 
-    period: str = None, 
-    ann_date: str = None, 
     start_date: str = None, 
     end_date: str = None,
+    period: str = None, 
     limit: int = 10 # Max number of reports to return if multiple are found
 ) -> str:
     """
     获取A股上市公司历史财务指标数据。
-    可以按报告期(period)、公告日期(ann_date)或公告日期范围(start_date, end_date)进行查询。
+    支持按报告期(period)或报告期范围(start_date, end_date)进行查询。
     必须提供 ts_code。
     必须提供以下条件之一：
     1. period (报告期)
-    2. ann_date (公告日期)
-    3. start_date 和 end_date (公告日期范围)
-    返回匹配条件的所有财务报告期数据 (按报告期、公告日降序排列，最多显示 limit 条记录)。
+    2. start_date 和 end_date (报告期范围)
+    返回匹配条件的所有财务报告期数据 (按报告期降序排列，最多显示 limit 条记录)。
 
     参数:
         ts_code: 股票代码 (例如: 600348.SH)
-        period: 报告期 (可选, YYYYMMDD格式, 例如: 20231231 代表年报)
-        ann_date: 公告日期 (可选, YYYYMMDD格式)
-        start_date: 公告开始日期 (可选, YYYYMMDD格式, 与end_date一同使用)
-        end_date: 公告结束日期 (可选, YYYYMMDD格式, 与start_date一同使用)
+        start_date: 报告期开始日期 (可选, YYYYMMDD格式, 与end_date一同使用)
+        end_date: 报告期结束日期 (可选, YYYYMMDD格式, 与start_date一同使用)
+        period: 单个报告期 (可选, YYYYMMDD格式, 例如: 20231231 代表年报)
         limit: 返回记录的条数上限 (默认为10)
     """
-    print(f"DEBUG: Tool get_financial_indicator called with ts_code: '{ts_code}', period: '{period}', ann_date: '{ann_date}', start_date: '{start_date}', end_date: '{end_date}', limit: {limit}.", file=sys.stderr, flush=True)
+    print(f"DEBUG: Tool get_financial_indicator called with ts_code: '{ts_code}', start_date: '{start_date}', end_date: '{end_date}', period: '{period}', limit: {limit}.", file=sys.stderr, flush=True)
     token_value = get_tushare_token()
     if not token_value:
         return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
@@ -706,8 +703,8 @@ def get_financial_indicator(
     if not ts_code:
         return "错误：股票代码 (ts_code) 是必需的。"
 
-    if not (period or ann_date or (start_date and end_date)):
-        return "错误: 请至少提供 period, ann_date, 或 start_date 与 end_date 组合中的一组参数。"
+    if not (period or (start_date and end_date)):
+        return "错误: 请至少提供 period 或 start_date 与 end_date 组合中的一组参数。"
     if (start_date and not end_date) or (not start_date and end_date):
         return "错误: start_date 和 end_date 必须同时提供。"
 
@@ -718,9 +715,7 @@ def get_financial_indicator(
         api_params = {'ts_code': ts_code}
         if period:
             api_params['period'] = period
-        if ann_date:
-            api_params['ann_date'] = ann_date
-        if start_date and end_date: # ann_date range
+        elif start_date and end_date: # report date range
             api_params['start_date'] = start_date
             api_params['end_date'] = end_date
 
