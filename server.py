@@ -597,43 +597,75 @@ def get_daily_metrics(ts_code: str, trade_date: str) -> str:
         return f"获取每日行情指标失败：{str(e)}"
 
 @mcp.tool()
-def get_daily_prices(ts_code: str, trade_date: str) -> str:
+def get_daily_prices(ts_code: str, trade_date: str = None, start_date: str = None, end_date: str = None) -> str:
     """
-    获取指定股票在特定交易日的开盘价、最高价、最低价和收盘价。
+    获取指定股票在特定交易日或一段时期内的开盘价、最高价、最低价和收盘价。
 
     参数:
         ts_code: 股票代码 (例如: 600126.SH)
-        trade_date: 交易日期 (YYYYMMDD格式, 例如: 20250227)
+        trade_date: 交易日期 (YYYYMMDD格式, 例如: 20250227)。与 start_date/end_date 互斥。
+        start_date: 开始日期 (YYYYMMDD格式)。需与 end_date 一同使用。
+        end_date: 结束日期 (YYYYMMDD格式)。需与 start_date 一同使用。
     """
-    print(f"DEBUG: Tool get_daily_prices called with ts_code: '{ts_code}', trade_date: '{trade_date}'.", file=sys.stderr, flush=True)
+    print(f"DEBUG: Tool get_daily_prices called with ts_code: '{ts_code}', trade_date: '{trade_date}', start_date: '{start_date}', end_date: '{end_date}'.", file=sys.stderr, flush=True)
     token_value = get_tushare_token()
     if not token_value:
         return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+
+    if not ((trade_date and not (start_date or end_date)) or ((start_date and end_date) and not trade_date)):
+        return "错误：请提供 trade_date (用于单日查询) 或 start_date 和 end_date (用于区间查询)。"
+
     try:
         pro = ts.pro_api(token_value)
-        df = pro.daily(ts_code=ts_code, trade_date=trade_date,
-                       fields='ts_code,trade_date,open,high,low,close,vol,amount')
+        api_params = {'ts_code': ts_code, 'fields': 'ts_code,trade_date,open,high,low,close,vol,amount'}
+        if trade_date:
+            api_params['trade_date'] = trade_date
+        if start_date and end_date:
+            api_params['start_date'] = start_date
+            api_params['end_date'] = end_date
+
+        df = pro.daily(**api_params)
+
         if df.empty:
-            return f"未找到 {ts_code} ({ts_code}) 在 {trade_date} 的日线行情数据。"
-        price_data = df.iloc[0]
-        results = [f"--- {ts_code} ({ts_code}) {trade_date} 价格信息 ---"]
-        price_fields = {
-            'open': '开盘价', 'high': '最高价', 'low': '最低价',
-            'close': '收盘价', 'vol': '成交量', 'amount': '成交额'
-        }
-        for field, label in price_fields.items():
-            if field in price_data and pd.notna(price_data[field]):
-                try:
-                    numeric_value = pd.to_numeric(price_data[field])
-                    unit = '元' if field in ['open', 'high', 'low', 'close'] else '万股'
-                    results.append(f"{label}: {numeric_value:.2f} {unit}")
-                except (ValueError, TypeError):
-                    unit = '元' if field in ['open', 'high', 'low', 'close'] else '万股' # Ensure unit is defined for error case
-                    results.append(f"{label}: (值非数字: {price_data[field]}) {unit}")
+            if trade_date:
+                return f"未找到 {ts_code} 在 {trade_date} 的日线行情数据。"
             else:
-                unit = '元' if field in ['open', 'high', 'low', 'close'] else '万股' # Ensure unit is defined for missing case
-                results.append(f"{label}: 未提供 {unit}")
-        return "\\n".join(results)
+                return f"未找到 {ts_code} 在 {start_date} 到 {end_date} 期间的日线行情数据。"
+
+        df_sorted = df.sort_values(by='trade_date', ascending=False)
+        
+        results = []
+        stock_name = _get_stock_name(pro, ts_code)
+        if trade_date:
+            results.append(f"--- {stock_name} ({ts_code}) {trade_date} 价格信息 ---")
+        else:
+            results.append(f"--- {stock_name} ({ts_code}) {start_date} to {end_date} 价格信息 ---")
+
+        for index, row in df_sorted.iterrows():
+            date_str = row['trade_date']
+            results.append(f"\n日期: {date_str}")
+            price_fields = {
+                'open': '开盘价', 'high': '最高价', 'low': '最低价',
+                'close': '收盘价', 'vol': '成交量', 'amount': '成交额'
+            }
+            for field, label in price_fields.items():
+                if field in row and pd.notna(row[field]):
+                    try:
+                        numeric_value = pd.to_numeric(row[field])
+                        if field == 'vol':
+                            unit = '手'
+                            results.append(f"  {label}: {numeric_value:,.0f} {unit}")
+                        elif field == 'amount':
+                            unit = '千元'
+                            results.append(f"  {label}: {numeric_value:,.2f} {unit}")
+                        else:
+                            unit = '元'
+                            results.append(f"  {label}: {numeric_value:.2f} {unit}")
+                    except (ValueError, TypeError):
+                        results.append(f"  {label}: (值非数字: {row[field]})")
+                else:
+                    results.append(f"  {label}: 未提供")
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_daily_prices: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -1649,4 +1681,4 @@ if __name__ == "__main__":
         # traceback.print_exc(file=sys.stderr) # Optional: might be too verbose for Ctrl+C
         # raise # Re-raise if you want the process to exit with an error code from the BaseException
     finally:
-        print("DEBUG: debug_server.py finished.", file=sys.stderr, flush=True) 
+        print("DEBUG: debug_server.py finished.", file=sys.stderr, flush=True)
