@@ -20,25 +20,6 @@
 3、通过 FastAPI 封装，提供标准化的 HTTP API 接口，方便与其他应用集成。
 
 <br>
-为了方便大家体验，项目核心的 `server.py` (基础数据服务) 和新增的 `hotlist.py` (热门榜单与题材数据服务) 均已通过 Render 完成了在线部署。
-你可以直接在支持 MCP 的 AI IDE 中（如 Cursor 或 Trae）通过以下 `mcp.json` 配置快速体验这两个服务：
-
-```json
-{
-  "mcpServers": {
-    "Tushare_mcp": {
-      "url": "https://tushare-mcp.onrender.com/sse",
-      "type": "sse"
-    },
-    "hotlist_mcp": {
-      "url": "https://hotlist-mcp.onrender.com/sse",
-      "type": "sse"
-    }
-  }
-}
-```
-
-[👉使用 cherry studio 快速体验教程](https://doc.weixin.qq.com/doc/w3_AbQAFgbhALUCN01st0nWWQfyyiN0f?scode=AJEAIQdfAAo9jULS9NAbQAFgbhALU)
 
 ## 20250515 更新
 **支持基础的港股股票查询**
