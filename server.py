@@ -7,7 +7,6 @@ from dotenv import load_dotenv, set_key
 import pandas as pd
 from datetime import datetime, timedelta
 import traceback
-
 from mcp.server.fastmcp import FastMCP
 import os
 
