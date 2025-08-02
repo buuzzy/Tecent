@@ -1736,6 +1736,50 @@ def get_trade_calendar(exchange: str = '', start_date: str = None, end_date: str
         traceback.print_exc(file=sys.stderr)
         return f"获取交易日历失败: {str(e)}"
 
+@mcp.tool()
+def get_start_date_for_n_days(end_date: str, days_ago: int = 80) -> str:
+    """
+    根据结束日期和天数，获取Tushare交易日历上的起始日期。
+
+    参数:
+        end_date: str, 结束日期 (格式：YYYYMMDD)
+        days_ago: int, 需要回溯的交易日天数 (默认为80)
+    """
+    print(f"DEBUG: Tool get_start_date_for_n_days called with end_date='{end_date}', days_ago={days_ago}.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+
+    try:
+        pro = ts.pro_api(token_value)
+        end_dt = datetime.strptime(end_date, '%Y%m%d')
+        # 为了获取足够的日历数据，我们估算一个较早的开始日期
+        # 通常交易日与日历日的比例约为 252/365 ≈ 0.7。为保险起见，我们用更大的乘数。
+        estimated_days = int(days_ago / 0.5) # 넉넉하게 160일
+        start_dt_estimated = end_dt - timedelta(days=estimated_days)
+        start_date_estimated_str = start_dt_estimated.strftime('%Y%m%d')
+
+        df = pro.trade_cal(start_date=start_date_estimated_str, end_date=end_date, is_open='1')
+
+        if df.empty or len(df) < days_ago:
+            return f"错误：无法获取足够的交易日数据。在 {start_date_estimated_str} 和 {end_date} 之间只找到了 {len(df)} 个交易日，需要 {days_ago} 个。"
+
+        # 日期已经是升序排列的，我们取倒数第N个即可
+        trading_days = df['cal_date'].sort_values(ascending=False).tolist()
+        
+        if len(trading_days) < days_ago:
+             return f"错误：再次确认，交易日数据不足。在 {start_date_estimated_str} 和 {end_date} 之间只找到了 {len(trading_days)} 个交易日，需要 {days_ago} 个。"
+
+        # 获取第N个交易日
+        start_date_actual = trading_days[days_ago - 1]
+
+        return f"查询成功。对于结束日期 {end_date}，往前 {days_ago} 个交易日的开始日期是: {start_date_actual}"
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_start_date_for_n_days: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"计算起始日期失败: {str(e)}"
+
 if __name__ == "__main__":
     print("DEBUG: debug_server.py entering main section for FastAPI...", file=sys.stderr, flush=True)
     try:
