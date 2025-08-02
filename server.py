@@ -1680,6 +1680,62 @@ except Exception as e_workaround:
     traceback.print_exc(file=sys.stderr)
 # --- End of MCP SSE Workaround Integration ---
 
+@mcp.tool()
+def get_trade_calendar(exchange: str = '', start_date: str = None, end_date: str = None) -> str:
+    """
+    获取各大交易所交易日历数据。
+
+    参数:
+        exchange: str, 交易所 SSE上交所,SZSE深交所,CFFEX 中金所,SHFE 上期所,CZCE 郑商所,DCE 大商所,INE 上能源 (默认为上交所)
+        start_date: str, 开始日期 (格式：YYYYMMDD)
+        end_date: str, 结束日期 (格式：YYYYMMDD)
+    """
+    print(f"DEBUG: Tool get_trade_calendar called with exchange='{exchange}', start_date='{start_date}', end_date='{end_date}'.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+
+    try:
+        pro = ts.pro_api(token_value)
+        query_params = {
+            'exchange': exchange,
+            'start_date': start_date,
+            'end_date': end_date
+        }
+        # 移除值为None的参数，以使用Tushare API的默认值
+        query_params = {k: v for k, v in query_params.items() if v is not None}
+
+        df = pro.trade_cal(**query_params)
+
+        if df.empty:
+            return "未找到符合条件的交易日历数据。"
+
+        # 筛选出开盘日
+        trading_days = df[df['is_open'] == 1]
+        if trading_days.empty:
+            return "在指定日期范围内没有找到交易日。"
+
+        # 格式化输出
+        results = [f"--- 交易日历查询结果 (交易所: {exchange if exchange else '默认'}) ---"]
+        # 限制输出长度，例如最多显示最近的100个交易日
+        df_limited = trading_days.head(100)
+
+        day_list = df_limited['cal_date'].tolist()
+        results.append("交易日列表:")
+        # 每10个日期换一行
+        for i in range(0, len(day_list), 10):
+            results.append(" ".join(day_list[i:i+10]))
+
+        if len(trading_days) > 100:
+            results.append(f"\n注意: 结果超过100条，仅显示前100条。总共有 {len(trading_days)} 个交易日。")
+
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_trade_calendar: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"获取交易日历失败: {str(e)}"
+
 if __name__ == "__main__":
     print("DEBUG: debug_server.py entering main section for FastAPI...", file=sys.stderr, flush=True)
     try:
