@@ -17,29 +17,32 @@ import uvicorn
 from starlette.requests import Request
 from mcp.server.sse import SseServerTransport
 
+# Import our unified logging and exception handling utilities
+from utils import log_debug, handle_exception
+
 # Logger for debugging
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-print("DEBUG: debug_server.py starting...", file=sys.stderr, flush=True)
+log_debug("debug_server.py starting...")
 
 # --- Start of ENV_FILE and Helper Functions ---
 ENV_FILE = Path.home() / ".tushare_mcp" / ".env"
-print(f"DEBUG: ENV_FILE path resolved to: {ENV_FILE}", file=sys.stderr, flush=True)
+log_debug(f"ENV_FILE path resolved to: {ENV_FILE}")
 
 def _get_stock_name(pro_api_instance, ts_code: str) -> str:
     """Helper function to get stock name from ts_code."""
-    print(f"DEBUG: _get_stock_name called for ts_code: {ts_code}", file=sys.stderr, flush=True)
+    log_debug(f"_get_stock_name called for ts_code: {ts_code}")
     if not pro_api_instance:
-        print("DEBUG: _get_stock_name received no pro_api_instance. Cannot fetch name.", file=sys.stderr, flush=True)
+        log_debug("_get_stock_name received no pro_api_instance. Cannot fetch name.")
         return ts_code
     try:
         df_basic = pro_api_instance.stock_basic(ts_code=ts_code, fields='ts_code,name')
         if not df_basic.empty:
             return df_basic.iloc[0]['name']
     except Exception as e:
-        print(f"Warning: Failed to get stock name for {ts_code}: {e}", file=sys.stderr, flush=True)
+        log_debug(f"Warning: Failed to get stock name for {ts_code}: {e}")
     return ts_code
 
 def _fetch_latest_report_data(
@@ -60,20 +63,20 @@ def _fetch_latest_report_data(
     elif hasattr(api_func, '__name__'):
         func_name = api_func.__name__
 
-    print(f"DEBUG: _fetch_latest_report_data called for {func_name}, period: {result_period_value}, is_list: {is_list_result}", file=sys.stderr, flush=True)
+    log_debug(f"_fetch_latest_report_data called for {func_name}, period: {result_period_value}, is_list: {is_list_result}")
     try:
         df = api_func(**api_params)
         if df.empty:
-            print(f"DEBUG: _fetch_latest_report_data: API call {func_name} returned empty DataFrame for {api_params.get('ts_code')}", file=sys.stderr, flush=True)
+            log_debug(f"_fetch_latest_report_data: API call {func_name} returned empty DataFrame for {api_params.get('ts_code')}")
             return None
 
         # Ensure 'ann_date' and the specified period field exist for sorting/filtering
         if 'ann_date' not in df.columns:
-            print(f"Warning: _fetch_latest_report_data: 'ann_date' not in DataFrame columns for {func_name} on {api_params.get('ts_code')}. Returning raw df (or first row if not list).", file=sys.stderr, flush=True)
+            log_debug(f"Warning: _fetch_latest_report_data: 'ann_date' not in DataFrame columns for {func_name} on {api_params.get('ts_code')}. Returning raw df (or first row if not list).")
             return df if is_list_result else df.head(1)
-        
+
         if result_period_field_name not in df.columns:
-            print(f"Warning: _fetch_latest_report_data: Period field '{result_period_field_name}' not in DataFrame columns for {func_name} on {api_params.get('ts_code')}. Filtering by ann_date only.", file=sys.stderr, flush=True)
+            log_debug(f"Warning: _fetch_latest_report_data: Period field '{result_period_field_name}' not in DataFrame columns for {func_name} on {api_params.get('ts_code')}. Filtering by ann_date only.")
             # Sort by ann_date to get the latest announcement(s)
             df_sorted_by_ann = df.sort_values(by='ann_date', ascending=False)
             if df_sorted_by_ann.empty:
@@ -87,8 +90,8 @@ def _fetch_latest_report_data(
         df_filtered_period = df[df[result_period_field_name].astype(str) == str(result_period_value)]
 
         if df_filtered_period.empty:
-            print(f"DEBUG: _fetch_latest_report_data: No data found for period {result_period_value} after filtering by '{result_period_field_name}' for {func_name} on {api_params.get('ts_code')}. Original df had {len(df)} rows.", file=sys.stderr, flush=True)
-            # Fallback: if strict period filtering yields nothing, but original df had data, 
+            log_debug(f"_fetch_latest_report_data: No data found for period {result_period_value} after filtering by '{result_period_field_name}' for {func_name} on {api_params.get('ts_code')}. Original df had {len(df)} rows.")
+            # Fallback: if strict period filtering yields nothing, but original df had data,
             # it might be that ann_date is more reliable or the period was slightly off.
             # For now, let's return None if period match fails, to be strict.
             # Consider alternative fallback if needed, e.g. using latest ann_date from original df.
@@ -101,17 +104,17 @@ def _fetch_latest_report_data(
         
         latest_ann_date = df_sorted_by_ann['ann_date'].iloc[0]
         df_latest_ann = df_sorted_by_ann[df_sorted_by_ann['ann_date'] == latest_ann_date]
-        
+
         if is_list_result:
-            print(f"DEBUG: _fetch_latest_report_data: Returning {len(df_latest_ann)} rows for latest announcement on {latest_ann_date} (list_result=True)", file=sys.stderr, flush=True)
+            log_debug(f"_fetch_latest_report_data: Returning {len(df_latest_ann)} rows for latest announcement on {latest_ann_date} (list_result=True)")
             return df_latest_ann # Return all rows for the latest announcement date for this period
         else:
             # Return only the top-most row (which is the latest announcement for that period)
-            print(f"DEBUG: _fetch_latest_report_data: Returning 1 row for latest announcement on {latest_ann_date} (list_result=False)", file=sys.stderr, flush=True)
+            log_debug(f"_fetch_latest_report_data: Returning 1 row for latest announcement on {latest_ann_date} (list_result=False)")
             return df_latest_ann.head(1)
 
     except Exception as e:
-        print(f"Error in _fetch_latest_report_data calling {func_name} for {api_params.get('ts_code', 'N/A')}, period {result_period_value}: {e}", file=sys.stderr, flush=True)
+        log_debug(f"Error in _fetch_latest_report_data calling {func_name} for {api_params.get('ts_code', 'N/A')}, period {result_period_value}: {e}")
         traceback.print_exc(file=sys.stderr)
         return None
 # --- End of MODIFIED _fetch_latest_report_data ---
@@ -119,9 +122,9 @@ def _fetch_latest_report_data(
 # --- MCP Instance Creation ---
 try:
     mcp = FastMCP("Tushare Tools Enhanced")
-    print("DEBUG: FastMCP instance created for Tushare Tools Enhanced.", file=sys.stderr, flush=True)
+    log_debug("FastMCP instance created for Tushare Tools Enhanced.")
 except Exception as e:
-    print(f"DEBUG: ERROR creating FastMCP: {e}", file=sys.stderr, flush=True)
+    log_debug(f"ERROR creating FastMCP: {e}")
     traceback.print_exc(file=sys.stderr)
     raise
 # --- End of MCP Instance Creation ---
@@ -145,20 +148,20 @@ async def api_setup_tushare_token(payload: dict = Body(...)):
     Expects a JSON payload with a "token" key.
     Example: {"token": "your_actual_token_here"}
     """
-    print(f"DEBUG: API /tools/setup_tushare_token called with payload: {{payload}}", file=sys.stderr, flush=True)
+    log_debug(f"API /tools/setup_tushare_token called with payload: {payload}")
     token = payload.get("token")
     if not token or not isinstance(token, str):
-        print(f"DEBUG: API /tools/setup_tushare_token - Missing or invalid token in payload.", file=sys.stderr, flush=True)
+        log_debug("API /tools/setup_tushare_token - Missing or invalid token in payload.")
         raise HTTPException(status_code=400, detail="Missing or invalid 'token' in payload. Expected a JSON object with a 'token' string.")
 
     try:
         # Call your original tool function
         original_tool_function_output = setup_tushare_token(token=token) # This is your original @mcp.tool() function
-        print(f"DEBUG: API /tools/setup_tushare_token - Original tool output: {{original_tool_function_output}}", file=sys.stderr, flush=True)
+        log_debug(f"API /tools/setup_tushare_token - Original tool output: {original_tool_function_output}")
         return {"status": "success", "message": original_tool_function_output}
     except Exception as e:
         error_message = f"Error setting up token via API: {str(e)}"
-        print(f"DEBUG: ERROR in api_setup_tushare_token: {{error_message}}", file=sys.stderr, flush=True)
+        log_debug(f"ERROR in api_setup_tushare_token: {error_message}")
         traceback.print_exc(file=sys.stderr) # Keep detailed server-side logs
         raise HTTPException(status_code=500, detail=error_message)
 
@@ -167,42 +170,42 @@ async def api_setup_tushare_token(payload: dict = Body(...)):
 # --- Start of Core Token Management Functions (to be kept) ---
 def init_env_file():
     """初始化环境变量文件"""
-    print("DEBUG: init_env_file called.", file=sys.stderr, flush=True)
+    log_debug("init_env_file called.")
     try:
-        print(f"DEBUG: Attempting to create directory: {ENV_FILE.parent}", file=sys.stderr, flush=True)
+        log_debug(f"Attempting to create directory: {ENV_FILE.parent}")
         ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-        print(f"DEBUG: Directory {ENV_FILE.parent} ensured.", file=sys.stderr, flush=True)
+        log_debug(f"Directory {ENV_FILE.parent} ensured.")
         if not ENV_FILE.exists():
-            print(f"DEBUG: ENV_FILE {ENV_FILE} does not exist, attempting to touch.", file=sys.stderr, flush=True)
+            log_debug(f"ENV_FILE {ENV_FILE} does not exist, attempting to touch.")
             ENV_FILE.touch()
-            print(f"DEBUG: ENV_FILE {ENV_FILE} touched.", file=sys.stderr, flush=True)
+            log_debug(f"ENV_FILE {ENV_FILE} touched.")
         else:
-            print(f"DEBUG: ENV_FILE {ENV_FILE} already exists.", file=sys.stderr, flush=True)
+            log_debug(f"ENV_FILE {ENV_FILE} already exists.")
         load_dotenv(ENV_FILE)
-        print("DEBUG: load_dotenv(ENV_FILE) called.", file=sys.stderr, flush=True)
+        log_debug("load_dotenv(ENV_FILE) called.")
     except Exception as e_fs:
-        print(f"DEBUG: ERROR in init_env_file filesystem operations: {str(e_fs)}", file=sys.stderr, flush=True)
+        log_debug(f"ERROR in init_env_file filesystem operations: {str(e_fs)}")
         traceback.print_exc(file=sys.stderr)
 
 def get_tushare_token() -> Optional[str]:
     """获取Tushare token"""
-    print("DEBUG: get_tushare_token called.", file=sys.stderr, flush=True)
+    log_debug("get_tushare_token called.")
     init_env_file()
     token = os.getenv("TUSHARE_TOKEN")
-    print(f"DEBUG: get_tushare_token: os.getenv result: {'TOKEN_FOUND' if token else 'NOT_FOUND'}", file=sys.stderr, flush=True)
+    log_debug(f"get_tushare_token: os.getenv result: {'TOKEN_FOUND' if token else 'NOT_FOUND'}")
     return token
 
 def set_tushare_token(token: str):
     """设置Tushare token"""
-    print(f"DEBUG: set_tushare_token called with token: {'********' if token else 'None'}", file=sys.stderr, flush=True)
+    log_debug(f"set_tushare_token called with token: {'********' if token else 'None'}")
     init_env_file()
     try:
         set_key(ENV_FILE, "TUSHARE_TOKEN", token)
-        print(f"DEBUG: set_key executed for ENV_FILE: {ENV_FILE}", file=sys.stderr, flush=True)
+        log_debug(f"set_key executed for ENV_FILE: {ENV_FILE}")
         ts.set_token(token)
-        print("DEBUG: ts.set_token(token) executed.", file=sys.stderr, flush=True)
+        log_debug("ts.set_token(token) executed.")
     except Exception as e_set_token:
-        print(f"DEBUG: ERROR in set_tushare_token during set_key or ts.set_token: {str(e_set_token)}", file=sys.stderr, flush=True)
+        log_debug(f"ERROR in set_tushare_token during set_key or ts.set_token: {str(e_set_token)}")
         traceback.print_exc(file=sys.stderr)
 
 # --- End of Core Token Management Functions ---
@@ -212,7 +215,7 @@ def set_tushare_token(token: str):
 @mcp.prompt()
 def configure_token() -> str:
     """配置Tushare token的提示模板"""
-    print("DEBUG: Prompt configure_token is being accessed/defined.", file=sys.stderr, flush=True)
+    log_debug("Prompt configure_token is being accessed/defined.")
     return """请提供您的Tushare API token。
 您可以在 https://tushare.pro/user/token 获取您的token。
 如果您还没有Tushare账号，请先在 https://tushare.pro/register 注册。
@@ -222,11 +225,11 @@ def configure_token() -> str:
 @mcp.tool()
 def setup_tushare_token(token: str) -> str:
     """设置Tushare API token"""
-    print(f"DEBUG: Tool setup_tushare_token called with token: {'********' if token else 'None'}", file=sys.stderr, flush=True)
+    log_debug(f"Tool setup_tushare_token called with token: {'********' if token else 'None'}")
     try:
         set_tushare_token(token) # This function internally calls ts.set_token(token) which might be enough
                                  # However, to be consistent and absolutely sure, we'll also re-init pro with this token.
-        print("DEBUG: setup_tushare_token attempting explicit ts.pro_api(token) call.", file=sys.stderr, flush=True)
+        log_debug("setup_tushare_token attempting explicit ts.pro_api(token) call.")
         # Explicitly get and use the token that was just set for this verification step.
         current_token = get_tushare_token()
         if not current_token:
@@ -234,24 +237,24 @@ def setup_tushare_token(token: str) -> str:
             # that get_tushare_token reads.
             return "Token配置尝试完成，但未能立即验证。请稍后使用 check_token_status 检查。"
         ts.pro_api(current_token) # Verify with the token just set and retrieved
-        print("DEBUG: setup_tushare_token ts.pro_api(current_token) call successful.", file=sys.stderr, flush=True)
+        log_debug("setup_tushare_token ts.pro_api(current_token) call successful.")
         return "Token配置成功！您现在可以使用Tushare的API功能了。"
     except Exception as e:
-        print(f"DEBUG: ERROR in setup_tushare_token: {str(e)}", file=sys.stderr, flush=True)
+        log_debug(f"ERROR in setup_tushare_token: {str(e)}")
         traceback.print_exc(file=sys.stderr)
         return f"Token配置失败：{str(e)}"
 
 @mcp.tool()
 def check_token_status() -> str:
     """检查Tushare token状态"""
-    print("DEBUG: Tool check_token_status called.", file=sys.stderr, flush=True)
+    log_debug("Tool check_token_status called.")
     token = get_tushare_token()
     if not token:
-        print("DEBUG: check_token_status: No token found by get_tushare_token.", file=sys.stderr, flush=True)
+        log_debug("check_token_status: No token found by get_tushare_token.")
         return "未配置Tushare token。请使用configure_token提示来设置您的token。"
 
     # **** MODIFICATION FOR DIAGNOSIS ****
-    print(f"DEBUG: check_token_status: Token value from get_tushare_token() is '[{token}]'", file=sys.stderr, flush=True)
+    log_debug(f"check_token_status: Token value from get_tushare_token() is '[{token}]'")
     # ***********************************
 
     try:
