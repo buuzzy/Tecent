@@ -17,15 +17,43 @@ import uvicorn
 from starlette.requests import Request
 from mcp.server.sse import SseServerTransport
 
-# Import our unified logging and exception handling utilities
-from utils import log_debug, handle_exception
-
 # Logger for debugging
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-log_debug("debug_server.py starting...")
+# Create logging handler
+handler = logging.StreamHandler(sys.stderr)
+handler.setLevel(logging.INFO)
+
+# Create logging formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+# Add handler to logger
+logger.addHandler(handler)
+
+def log_debug(message: str):
+    """Unified logging function"""
+    logger.info(message)
+
+def handle_exception(func):
+    """Unified exception handler decorator"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error in {func.__name__}: {str(e)}")
+            traceback.print_exc(file=sys.stderr)
+            # Return appropriate error message based on function name
+            if func.__name__.startswith('get_') or func.__name__.startswith('search_'):
+                return f"查询失败：{str(e)}"
+            elif func.__name__.startswith('setup_') or func.__name__.startswith('set_'):
+                return f"设置失败：{str(e)}"
+            else:
+                return f"操作失败：{str(e)}"
+    return wrapper
 
 # --- Start of ENV_FILE and Helper Functions ---
 ENV_FILE = Path.home() / ".tushare_mcp" / ".env"
@@ -254,23 +282,23 @@ def check_token_status() -> str:
         return "未配置Tushare token。请使用configure_token提示来设置您的token。"
 
     # **** MODIFICATION FOR DIAGNOSIS ****
-    log_debug(f"check_token_status: Token value from get_tushare_token() is '[{token}]'")
+    log_debug(f"check_token_status: Token value from get_tushare_token() is '[{'*' * len(token) if token else 'None'}]'")
     # ***********************************
 
     try:
         # **** MODIFICATION FOR DIAGNOSIS ****
-        print("DEBUG: check_token_status attempting ts.pro_api(token) call with EXPLICIT token.", file=sys.stderr, flush=True)
+        log_debug("check_token_status attempting ts.pro_api(token) call with EXPLICIT token.")
         ts.pro_api(token) # Pass the retrieved token explicitly
         # ***********************************
-        print("DEBUG: check_token_status ts.pro_api(token) call successful.", file=sys.stderr, flush=True)
+        log_debug("check_token_status ts.pro_api(token) call successful.")
         return "Token配置正常，可以使用Tushare API。"
     except Exception as e:
         # **** MODIFICATION FOR DIAGNOSIS ****
-        print(f"DEBUG: ERROR in check_token_status (with explicit token from get_tushare_token): {str(e)}", file=sys.stderr, flush=True)
+        log_debug(f"ERROR in check_token_status (with explicit token from get_tushare_token): {str(e)}")
         # ***********************************
         traceback.print_exc(file=sys.stderr)
         # **** MODIFICATION FOR DIAGNOSIS ****
-        return f"Token无效或已过期 (tried with explicit token '{token[:5]}...'): {str(e)}"
+        return f"Token无效或已过期 (tried with explicit token): {str(e)}"
         # ***********************************
 
 @mcp.tool()
