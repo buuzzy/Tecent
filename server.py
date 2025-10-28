@@ -1,22 +1,21 @@
 import sys
-import os
 import traceback
+import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import tushare as ts
-import uvicorn
 import pandas as pd
+import uvicorn  # <-- 关键修复：添加此行导入 uvicorn
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, HTTPException, Body
-from mcp.server.fastmcp import FastMCP
 
-# 关键修复 1: 添加这两个导入
+from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from mcp.server.sse import SseServerTransport
 
 # --- Environment and Helper Functions ---
-# 关键修复：将文件路径从用户主目录更改为可写的 /tmp 目录
 ENV_FILE = Path("/tmp") / ".tushare_env"
 
 def init_env_file():
@@ -43,7 +42,18 @@ def set_tushare_token(token: str):
         ts.set_token(token)
     except Exception as e:
         print(f"ERROR in set_tushare_token: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+
+def _get_stock_name(pro_api_instance, ts_code: str) -> str:
+    """Helper function to get stock name from ts_code."""
+    if not pro_api_instance:
+        return ts_code
+    try:
+        df_basic = pro_api_instance.stock_basic(ts_code=ts_code, fields='ts_code,name')
+        if not df_basic.empty:
+            return df_basic.iloc[0]['name']
+    except Exception as e:
+        print(f"Warning: Failed to get stock name for {ts_code}: {e}", file=sys.stderr)
+    return ts_code
 
 # --- MCP and FastAPI App Initialization ---
 try:
@@ -165,6 +175,57 @@ def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
         traceback.print_exc(file=sys.stderr)
         return f"查询失败：{e}"
 
+@mcp.tool()
+def get_money_flow_for_past_days(ts_code: str, days: int = 30) -> str:
+    """
+    获取指定股票在过去N天内的累计资金净流入情况。
+    注意：此接口需要2000 Tushare积分。
+
+    参数:
+        ts_code: 股票代码 (例如: 000001.SZ)
+        days: 查询最近多少天的数据 (默认为30天)
+    """
+    print(f"DEBUG: Tool get_money_flow_for_past_days called with ts_code: '{ts_code}', days: {days}.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置。请先进行配置。"
+
+    try:
+        pro = ts.pro_api(token_value)
+        stock_name = _get_stock_name(pro, ts_code)
+
+        # 计算日期范围
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        end_date_str = end_date.strftime('%Y%m%d')
+        start_date_str = start_date.strftime('%Y%m%d')
+
+        # 调用API
+        df = pro.moneyflow(ts_code=ts_code, start_date=start_date_str, end_date=end_date_str)
+
+        if df.empty:
+            return f"在 {start_date_str} 到 {end_date_str} 期间未找到 {stock_name} ({ts_code}) 的资金流向数据。"
+
+        # 计算总净流入
+        total_net_vol = df['net_mf_vol'].sum()
+        total_net_amount = df['net_mf_amount'].sum()
+
+        # 格式化输出 (已移除总结部分)
+        results = [
+            f"--- {stock_name} ({ts_code}) 最近 {days} 天资金流向统计 ---",
+            f"查询区间: {start_date_str} 至 {end_date_str}",
+            f"累计净流入量: {total_net_vol:,.0f} 手",
+            f"累计净流入额: {total_net_amount:,.2f} 万元"
+        ]
+
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_money_flow_for_past_days: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"查询资金流向失败：{str(e)}"
+
+
 # --- FastAPI Endpoints ---
 
 @app.get("/")
@@ -197,10 +258,6 @@ async def api_setup_tushare_token(payload: dict = Body(...)):
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=error_message)
 
-# 关键修复 2: 删除下面这行
-# mcp.mount_to(app, "/mcp")
-
-# 关键修复 3: 添加下面这段来自 server_demo.py 的代码
 # --- Start of MCP SSE Workaround Integration ---
 MCP_BASE_PATH = "/mcp" # The path where the MCP service will be available
 
@@ -234,6 +291,5 @@ except Exception as e_workaround:
 # --- Server Execution ---
 if __name__ == "__main__":
     # To run this server: uvicorn server.py:app --host 0.0.0.0 --port 8000 --reload
-    import os
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
