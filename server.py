@@ -1,5 +1,5 @@
-import sys # Added for stderr output
-import functools # Added for checking partial functions
+import sys
+import functools
 from pathlib import Path
 from typing import Optional, Callable, Any
 import tushare as ts
@@ -10,16 +10,17 @@ import traceback
 from mcp.server.fastmcp import FastMCP
 import os
 
-from fastapi import FastAPI, HTTPException, Body # Added HTTPException, Body
-import uvicorn # New import
-
-# fastapi.staticfiles is not used, so I won't import it here.
-# If FastMCP is not directly mountable as an ASGI app, this approach will need adjustment
-# based on FastMCP's specific API for integration.
+from fastapi import FastAPI, HTTPException, Body
+import uvicorn
 
 # Added for the workaround:
 from starlette.requests import Request
 from mcp.server.sse import SseServerTransport
+
+# Logger for debugging
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 print("DEBUG: debug_server.py starting...", file=sys.stderr, flush=True)
 
@@ -670,12 +671,135 @@ def get_daily_prices(ts_code: str, trade_date: str = None, start_date: str = Non
         traceback.print_exc(file=sys.stderr)
         return f"获取每日价格数据失败：{str(e)}"
 
+def _validate_financial_indicator_params(ts_code: str, period: str, ann_date: str, start_date: str, end_date: str) -> str:
+    """
+    验证财务指标查询参数的有效性
+
+    参数:
+        ts_code: 股票代码
+        period: 报告期
+        ann_date: 公告日期
+        start_date: 公告开始日期
+        end_date: 公告结束日期
+
+    返回:
+        错误消息字符串，如果没有错误则返回空字符串
+    """
+    if not ts_code:
+        return "错误：股票代码 (ts_code) 是必需的。"
+
+    if not (period or ann_date or (start_date and end_date)):
+        return "错误: 请至少提供 period, ann_date, 或 start_date 与 end_date 组合中的一组参数。"
+
+    if (start_date and not end_date) or (not start_date and end_date):
+        return "错误: start_date 和 end_date 必须同时提供。"
+
+    return ""
+
+def _build_fina_indicator_fields() -> str:
+    """
+    构建财务指标查询所需的字段列表
+
+    返回:
+        逗号分隔的字段字符串
+    """
+    req_fields = (
+        "ts_code", "ann_date", "end_date", "eps", "dt_eps", "total_revenue_ps",
+        "revenue_ps", "capital_rese_ps", "surplus_rese_ps", "undist_profit_ps",
+        "extra_item", "profit_dedt", "gross_margin", "current_ratio", "quick_ratio",
+        "cash_ratio", "invturn_days", "arturn_days", "inv_turn", "ar_turn",
+        "ca_turn", "fa_turn", "assets_turn", "op_income", "valuechange_income",
+        "interst_income", "daa", "ebit", "ebitda", "fcff", "fcfe",
+        "current_exint", "noncurrent_exint", "interestdebt", "netdebt",
+        "tangible_asset", "working_capital", "networking_capital", "invest_capital",
+        "retained_earnings", "diluted2_eps", "bps", "ocfps", "retainedps",
+        "cfps", "ebit_ps", "fcff_ps", "fcfe_ps", "netprofit_margin",
+        "grossprofit_margin", "cogs_of_sales", "expense_of_sales", "profit_to_gr",
+        "saleexp_to_gr", "adminexp_of_gr", "finaexp_of_gr", "impai_ttm",
+        "gc_of_gr", "op_of_gr", "ebit_of_gr", "roe", "roe_waa", "roe_dt", "roa",
+        "npta", "roic", "roe_yearly", "roa2_yearly", "roe_avg",
+        "opincome_of_ebt", "investincome_of_ebt", "n_op_profit_of_ebt",
+        "tax_to_ebt", "dtprofit_to_profit", "salescash_to_or", "ocf_to_or",
+        "ocf_to_opincome", "capitalized_to_da", "debt_to_assets", "assets_to_eqt",
+        "dp_assets_to_eqt", "ca_to_assets", "nca_to_assets",
+        "tbassets_to_totalassets", "int_to_talcap", "eqt_to_talcapital",
+        "currentdebt_to_debt", "longdeb_to_debt", "ocf_to_shortdebt", "debt_to_eqt"
+    )
+    return ",".join(req_fields)
+
+def _format_indicator_value(indicator_data: pd.Series, key: str, label: str, unit: str = "%") -> str:
+    """
+    格式化财务指标值
+
+    参数:
+        indicator_data: 财务指标数据行
+        key: 指标键名
+        label: 显示标签
+        unit: 单位类型 ("%", "亿元", "元")
+
+    返回:
+        格式化后的字符串
+    """
+    if key in indicator_data and pd.notna(indicator_data[key]):
+        value = indicator_data[key]
+        try:
+            numeric_value = pd.to_numeric(value)
+            if unit == "亿元":
+                # Tushare fina_indicator amounts are in Yuan, convert to 100 million Yuan
+                return f"{label}: {numeric_value / 100000000:.4f} {unit}"
+            elif unit == "元":
+                return f"{label}: {numeric_value:.4f} {unit}"
+            elif unit == "%":
+                return f"{label}: {numeric_value:.2f}%"
+            else:
+                return f"{label}: {numeric_value}"
+        except (ValueError, TypeError):
+            return f"{label}: (值非数字: {value})"
+    return f"{label}: 未提供"
+
+def _format_single_report(indicator_data: pd.Series) -> str:
+    """
+    格式化单个报告期的财务指标数据
+
+    参数:
+        indicator_data: 财务指标数据行
+
+    返回:
+        格式化后的报告字符串
+    """
+    current_period_end_date = indicator_data.get('end_date', 'N/A')
+    current_ann_date = indicator_data.get('ann_date', 'N/A')
+    report_header = f"报告期: {current_period_end_date}, 公告日期: {current_ann_date}"
+    results_for_report = [report_header]
+
+    # 格式化各项指标
+    results_for_report.append(_format_indicator_value(indicator_data, 'eps', '每股收益', unit='元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'dt_eps', '扣非每股收益', unit='元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'bps', '每股净资产', unit='元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'ocfps', '每股经营现金流', unit='元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'grossprofit_margin', '销售毛利率'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'netprofit_margin', '销售净利率'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'roe_yearly', '年化净资产收益率(ROE)'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'roe_waa', '加权平均ROE'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'roe_dt', '扣非加权平均ROE'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'debt_to_assets', '资产负债率'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'total_revenue', '营业总收入', unit='亿元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'n_income_attr_p', '归属母公司净利润', unit='亿元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'rd_exp', '研发费用', unit='亿元'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'tr_yoy', '营业总收入同比增长率'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'or_yoy', '营业收入同比增长率'))  # Operating Revenue YoY
+    results_for_report.append(_format_indicator_value(indicator_data, 'n_income_attr_p_yoy', '归母净利润同比增长率'))
+    results_for_report.append(_format_indicator_value(indicator_data, 'dtprofit_yoy', '扣非净利润同比增长率'))
+    results_for_report.append(f"更新标识: {indicator_data.get('update_flag', 'N/A')}")
+
+    return "\n".join(results_for_report)
+
 @mcp.tool()
 def get_financial_indicator(
-    ts_code: str, 
-    period: str = None, 
-    ann_date: str = None, 
-    start_date: str = None, 
+    ts_code: str,
+    period: str = None,
+    ann_date: str = None,
+    start_date: str = None,
     end_date: str = None,
     limit: int = 10 # Max number of reports to return if multiple are found
 ) -> str:
@@ -702,118 +826,57 @@ def get_financial_indicator(
     if not token_value:
         return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
 
-    if not ts_code:
-        return "错误：股票代码 (ts_code) 是必需的。"
-
-    if not (period or ann_date or (start_date and end_date)):
-        return "错误: 请至少提供 period, ann_date, 或 start_date 与 end_date 组合中的一组参数。"
-    if (start_date and not end_date) or (not start_date and end_date):
-        return "错误: start_date 和 end_date 必须同时提供。"
+    # 验证参数
+    validation_error = _validate_financial_indicator_params(ts_code, period, ann_date, start_date, end_date)
+    if validation_error:
+        return validation_error
 
     try:
         pro = ts.pro_api(token_value)
         stock_name = _get_stock_name(pro, ts_code)
-        
+
+        # 构建API参数
         api_params = {'ts_code': ts_code}
         if period:
             api_params['period'] = period
         if ann_date:
             api_params['ann_date'] = ann_date
-        if start_date and end_date: # ann_date range
+        if start_date and end_date:  # ann_date range
             api_params['start_date'] = start_date
             api_params['end_date'] = end_date
 
-        # Enhanced list of fields including debt_to_assets
-        req_fields = (
-            "ts_code", "ann_date", "end_date", "eps", "dt_eps", "total_revenue_ps",
-            "revenue_ps", "capital_rese_ps", "surplus_rese_ps", "undist_profit_ps",
-            "extra_item", "profit_dedt", "gross_margin", "current_ratio", "quick_ratio",
-            "cash_ratio", "invturn_days", "arturn_days", "inv_turn", "ar_turn",
-            "ca_turn", "fa_turn", "assets_turn", "op_income", "valuechange_income",
-            "interst_income", "daa", "ebit", "ebitda", "fcff", "fcfe",
-            "current_exint", "noncurrent_exint", "interestdebt", "netdebt",
-            "tangible_asset", "working_capital", "networking_capital", "invest_capital",
-            "retained_earnings", "diluted2_eps", "bps", "ocfps", "retainedps",
-            "cfps", "ebit_ps", "fcff_ps", "fcfe_ps", "netprofit_margin",
-            "grossprofit_margin", "cogs_of_sales", "expense_of_sales", "profit_to_gr",
-            "saleexp_to_gr", "adminexp_of_gr", "finaexp_of_gr", "impai_ttm",
-            "gc_of_gr", "op_of_gr", "ebit_of_gr", "roe", "roe_waa", "roe_dt", "roa",
-            "npta", "roic", "roe_yearly", "roa2_yearly", "roe_avg",
-            "opincome_of_ebt", "investincome_of_ebt", "n_op_profit_of_ebt",
-            "tax_to_ebt", "dtprofit_to_profit", "salescash_to_or", "ocf_to_or",
-            "ocf_to_opincome", "capitalized_to_da", "debt_to_assets", "assets_to_eqt",
-            "dp_assets_to_eqt", "ca_to_assets", "nca_to_assets",
-            "tbassets_to_totalassets", "int_to_talcap", "eqt_to_talcapital",
-            "currentdebt_to_debt", "longdeb_to_debt", "ocf_to_shortdebt", "debt_to_eqt"
-        )
-        api_params['fields'] = ",".join(req_fields)
-        
+        # 设置查询字段
+        api_params['fields'] = _build_fina_indicator_fields()
+
+        # 调用API获取数据
         df = pro.fina_indicator(**api_params)
 
         if df.empty:
             return f"未找到 {stock_name} ({ts_code}) 符合指定条件的财务指标数据。"
 
-        # Sort by report end_date first (desc), then by announcement date (desc) to get latest announcements for latest periods
+        # 排序数据
         df_sorted = df.sort_values(by=['end_date', 'ann_date'], ascending=[False, False])
-        
+
+        # 构建结果
         all_results_str = [f"--- {stock_name} ({ts_code}) 历史财务指标 (最多显示 {limit} 条) ---"]
-        
+
         actual_limit = min(limit, len(df_sorted))
         if actual_limit == 0:
              return f"未找到 {stock_name} ({ts_code}) 符合指定条件的财务指标数据 (排序后为空)。"
 
+        # 格式化每个报告期的数据
         for i in range(actual_limit):
             indicator_data = df_sorted.iloc[i]
-            current_period_end_date = indicator_data.get('end_date', 'N/A')
-            current_ann_date = indicator_data.get('ann_date', 'N/A')
-            report_header = f"报告期: {current_period_end_date}, 公告日期: {current_ann_date}"
-            results_for_report = [report_header]
+            formatted_report = _format_single_report(indicator_data)
+            all_results_str.append(formatted_report)
 
-            def format_indicator(key, label, unit="%"):
-                if key in indicator_data and pd.notna(indicator_data[key]):
-                    value = indicator_data[key]
-                    try:
-                        numeric_value = pd.to_numeric(value)
-                        if unit == "亿元":
-                            # Tushare fina_indicator amounts are in Yuan, convert to 100 million Yuan
-                            return f"{label}: {numeric_value / 100000000:.4f} {unit}"
-                        elif unit == "元":
-                            return f"{label}: {numeric_value:.4f} {unit}"
-                        elif unit == "%" :
-                            return f"{label}: {numeric_value:.2f}%"
-                        else:
-                            return f"{label}: {numeric_value}"
-                    except (ValueError, TypeError):
-                        return f"{label}: (值非数字: {value})"
-                return f"{label}: 未提供"
-
-            results_for_report.append(format_indicator('eps', '每股收益', unit='元'))
-            results_for_report.append(format_indicator('dt_eps', '扣非每股收益', unit='元'))
-            results_for_report.append(format_indicator('bps', '每股净资产', unit='元'))
-            results_for_report.append(format_indicator('ocfps', '每股经营现金流', unit='元'))
-            results_for_report.append(format_indicator('grossprofit_margin', '销售毛利率'))
-            results_for_report.append(format_indicator('netprofit_margin', '销售净利率'))
-            results_for_report.append(format_indicator('roe_yearly', '年化净资产收益率(ROE)'))
-            results_for_report.append(format_indicator('roe_waa', '加权平均ROE'))
-            results_for_report.append(format_indicator('roe_dt', '扣非加权平均ROE'))
-            results_for_report.append(format_indicator('debt_to_assets', '资产负债率'))
-            results_for_report.append(format_indicator('total_revenue', '营业总收入', unit='亿元'))
-            results_for_report.append(format_indicator('n_income_attr_p', '归属母公司净利润', unit='亿元'))
-            results_for_report.append(format_indicator('rd_exp', '研发费用', unit='亿元'))
-            results_for_report.append(format_indicator('tr_yoy', '营业总收入同比增长率'))
-            results_for_report.append(format_indicator('or_yoy', '营业收入同比增长率')) # Operating Revenue YoY
-            results_for_report.append(format_indicator('n_income_attr_p_yoy', '归母净利润同比增长率'))
-            results_for_report.append(format_indicator('dtprofit_yoy', '扣非净利润同比增长率'))
-            results_for_report.append(f"更新标识: {indicator_data.get('update_flag', 'N/A')}")
-            
-            all_results_str.append("\n".join(results_for_report))
             if i < actual_limit - 1:
                  all_results_str.append("------------------------")
-        
+
         return "\n".join(all_results_str)
 
     except Exception as e:
-        # Corrected error logging to use available parameters directly
+        # 错误日志记录
         print(f"DEBUG: ERROR in get_financial_indicator for ts_code='{ts_code}', period='{period}', ann_date='{ann_date}', start_date='{start_date}', end_date='{end_date}': {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return f"获取财务指标失败：{str(e)}"
