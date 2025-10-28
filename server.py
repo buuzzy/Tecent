@@ -641,7 +641,7 @@ def get_daily_prices(ts_code: str, trade_date: str = None, start_date: str = Non
         else:
             results.append(f"--- {stock_name} ({ts_code}) {start_date} to {end_date} 价格信息 ---")
 
-        for index, row in df_sorted.iterrows():
+        for _, row in df_sorted.iterrows():
             date_str = row['trade_date']
             results.append(f"\n日期: {date_str}")
             price_fields = {
