@@ -11,6 +11,10 @@ from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, HTTPException, Body
 from mcp.server.fastmcp import FastMCP
 
+# 关键修复 1: 添加这两个导入
+from starlette.requests import Request
+from mcp.server.sse import SseServerTransport
+
 # --- Environment and Helper Functions ---
 # 关键修复：将文件路径从用户主目录更改为可写的 /tmp 目录
 ENV_FILE = Path("/tmp") / ".tushare_env"
@@ -193,8 +197,39 @@ async def api_setup_tushare_token(payload: dict = Body(...)):
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=error_message)
 
-# Mount the MCP server to the FastAPI app
-mcp.mount_to(app, "/mcp")
+# 关键修复 2: 删除下面这行
+# mcp.mount_to(app, "/mcp")
+
+# 关键修复 3: 添加下面这段来自 server_demo.py 的代码
+# --- Start of MCP SSE Workaround Integration ---
+MCP_BASE_PATH = "/mcp" # The path where the MCP service will be available
+
+try:
+    messages_full_path = f"{MCP_BASE_PATH}/messages/"
+    sse_transport = SseServerTransport(messages_full_path)
+
+    async def handle_mcp_sse_handshake(request: Request) -> None:
+        """Handles the initial SSE handshake from the client."""
+        # request._send is a protected member, type: ignore is used.
+        async with sse_transport.connect_sse(
+            request.scope,
+            request.receive,
+            request._send, # type: ignore
+        ) as (read_stream, write_stream):
+            await mcp._mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp._mcp_server.create_initialization_options(),
+            )
+
+    app.add_route(MCP_BASE_PATH, handle_mcp_sse_handshake, methods=["GET"])
+    app.mount(messages_full_path, sse_transport.handle_post_message)
+
+except Exception as e_workaround:
+    print(f"DEBUG: CRITICAL ERROR applying MCP SSE workaround: {str(e_workaround)}", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
+# --- End of MCP SSE Workaround Integration ---
+
 
 # --- Server Execution ---
 if __name__ == "__main__":
