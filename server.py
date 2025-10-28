@@ -197,5 +197,7 @@ mcp.mount_to(app, "/mcp")
 
 # --- Server Execution ---
 if __name__ == "__main__":
-    # To run this server: uvicorn server_new:app --host 0.0.0.0 --port 8000 --reload
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # To run this server: uvicorn server.py:app --host 0.0.0.0 --port 8000 --reload
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
