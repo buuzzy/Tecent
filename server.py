@@ -12,7 +12,8 @@ from fastapi import FastAPI, HTTPException, Body
 from mcp.server.fastmcp import FastMCP
 
 # --- Environment and Helper Functions ---
-ENV_FILE = Path.home() / ".tushare_mcp" / ".env"
+# 关键修复：将文件路径从用户主目录更改为可写的 /tmp 目录
+ENV_FILE = Path("/tmp") / ".tushare_env"
 
 def init_env_file():
     """Initializes the environment file and its directory."""
