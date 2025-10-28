@@ -226,8 +226,60 @@ def get_money_flow_for_past_days(ts_code: str, days: int = 30) -> str:
         return f"查询资金流向失败：{str(e)}"
 
 
-# --- FastAPI Endpoints ---
+@mcp.tool()
+def get_top10_holders(ts_code: str, period: str = None) -> str:
+    """
+    获取上市公司前十大股东数据，包括持有数量和占总股本比例。
+    注意：此接口需要2000 Tushare积分。
 
+    参数:
+        ts_code: 股票代码 (例如: 600000.SH)
+        period: 报告期 (YYYYMMDD格式，例如: 20231231)。如果未提供，则获取最新数据。
+    """
+    print(f"DEBUG: Tool get_top10_holders called with ts_code: '{ts_code}', period: {period}.", file=sys.stderr, flush=True)
+    token_value = get_tushare_token()
+    if not token_value:
+        return "错误：Tushare token 未配置。请先进行配置。"
+
+    try:
+        pro = ts.pro_api(token_value)
+        stock_name = _get_stock_name(pro, ts_code)
+
+        # 准备API参数
+        params = {'ts_code': ts_code}
+        if period:
+            params['period'] = period
+
+        # 调用API
+        df = pro.top10_holders(**params)
+
+        if df.empty:
+            return f"未找到 {stock_name} ({ts_code}) 的前十大股东数据。"
+
+        # 获取最新的报告期
+        latest_end_date = df['end_date'].iloc[0]
+        df_latest = df[df['end_date'] == latest_end_date]
+
+        # 格式化输出
+        header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大股东 ---"
+        results = [header]
+        for _, row in df_latest.iterrows():
+            holder_info = (
+                f"股东名称: {row['holder_name']}\n"
+                f"  - 持有数量: {row['hold_amount']:,.0f} 股\n"
+                f"  - 占总股本比例: {row['hold_ratio']:.2f}%"
+            )
+            results.append(holder_info)
+
+        return "\n".join(results)
+
+    except Exception as e:
+        print(f"DEBUG: ERROR in get_top10_holders: {str(e)}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        return f"查询前十大股东失败：{str(e)}"
+
+
+# --- FastAPI Endpoints ---
 @app.get("/")
 async def read_root():
     return {"message": "Hello World - Tushare MCP API (New) is running!"}
