@@ -311,10 +311,10 @@ def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
             for field, label in optional_fields.items():
                 if field in available_fields and not pd.isna(row[field]):
                     info_parts.append(f"{label}: {row[field]}")
-            info = "\\n".join(info_parts)
-            info += "\\n------------------------"
+            info = "\n".join(info_parts)
+            info += "\n------------------------"
             result.append(info)
-        return "\\n".join(result)
+        return "\n".join(result)
     except Exception as e:
         print(f"DEBUG: ERROR in get_stock_basic_info: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -590,7 +590,7 @@ def get_daily_metrics(ts_code: str, trade_date: str) -> str:
         results.append(format_basic('pb', '市净率(PB)', unit='倍'))
         results.append(format_basic('turnover_rate', '换手率', unit='%'))
         results.append(format_basic('volume_ratio', '量比'))
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_daily_metrics: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -954,7 +954,7 @@ def get_income_statement(ts_code: str, period: str, report_type: str = "1") -> s
         results.append(f"财务费用: {format_value('fin_exp')}")
         results.append(f"研发费用: {format_value('rd_exp')}")
         results.append(f"基本每股收益: {format_value('basic_eps', unit='元')}")
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_income_statement: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -1083,7 +1083,7 @@ def get_daily_basic_info(ts_code: str, trade_date: str) -> str:
         results.append(format_basic('pe', '市盈率(PE)', unit='倍'))
         results.append(format_basic('pb', '市净率(PB)', unit='倍'))
         results.append(format_basic('dv_ratio', '股息率(TTM)', unit='%'))
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_daily_basic_info: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -1285,7 +1285,7 @@ def get_period_price_change(ts_code: str, start_date: str, end_date: str) -> str
             f"实际区间最后交易日: {actual_end_trade_date}, 当日收盘价: {end_close:.2f} 元",
             f"区间涨跌幅: {price_change_pct:.2f}%"
         ]
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_period_price_change: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -1363,7 +1363,7 @@ def get_balance_sheet(ts_code: str, period: str) -> str:
         results.append(format_bs_value('cap_rese', '资本公积金'))
         results.append(format_bs_value('undistr_porfit', '未分配利润'))
 
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_balance_sheet: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -1424,7 +1424,7 @@ def get_cash_flow(ts_code: str, period: str) -> str:
         results.append(format_cf_value('n_cashflow_fin_act', '筹资活动产生的现金流量净额'))
         results.append(format_cf_value('free_cashflow', '企业自由现金流量'))
         results.append(format_cf_value('net_profit', '净利润'))
-        return "\\n".join(results)
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_cash_flow: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
@@ -1538,11 +1538,11 @@ def get_fina_mainbz(ts_code: str, period: str, type: str = 'P', limit: int = 10)
             results.append(f"货币代码: {row.get('curr_type', 'N/A')}")
             results.append(f"更新标识: {row.get('update_flag', 'N/A')}")
             results.append("------------------------")
-        
+
         if len(df) > limit:
             results.append(f"注意: 数据超过 {limit} 条，仅显示前 {limit} 条。原始数据可能包含重复项，占比基于去重后总收入计算。")
-            
-        return "\\n".join(results)
+
+        return "\n".join(results)
     except Exception as e:
         print(f"DEBUG: ERROR in get_fina_mainbz for ts_code={ts_code}, period={period}, type={type}: {str(e)}", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
