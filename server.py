@@ -241,7 +241,14 @@ def get_shareholder_trades(pro, ts_code: str, days: int = 90, trade_type: str = 
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
     params = {'ts_code': ts_code, 'start_date': start_date.strftime('%Y%m%d'), 'end_date': end_date.strftime('%Y%m%d')}
-    if trade_type and trade_type.upper() in ['IN', 'DE']: params['trade_type'] = trade_type.upper()
+    
+    # --- 关键优化：增加对无效 trade_type 的校验 ---
+    if trade_type:
+        trade_type_upper = trade_type.upper()
+        if trade_type_upper in ['IN', 'DE']:
+            params['trade_type'] = trade_type_upper
+        else:
+            return f"错误：无效的交易类型 '{trade_type}'。请使用 'IN' (增持) 或 'DE' (减持)。"
 
     df = pro.stk_holdertrade(**params)
     if df.empty:
