@@ -88,12 +88,15 @@ def tushare_tool_handler(func: Callable) -> Callable:
         
         try:
             pro = ts.pro_api(token_value)
-            # 将pro实例和stock_name作为参数传递给被装饰的函数
+            
+            # --- 关键修复：直接在kwargs中注入或覆盖pro和stock_name ---
+            kwargs['pro'] = pro
             ts_code = kwargs.get('ts_code')
             if ts_code:
                 kwargs['stock_name'] = _get_stock_name(pro, ts_code)
             
-            return func(pro=pro, *args, **kwargs)
+            # 使用更新后的kwargs调用函数
+            return func(*args, **kwargs)
             
         except Exception as e:
             logging.error(f"工具 {func.__name__} 执行出错: {e}")
