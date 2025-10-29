@@ -1,13 +1,15 @@
 import sys
 import traceback
 import os
+import logging
+import functools
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 
 import tushare as ts
 import pandas as pd
-import uvicorn  # <-- 关键修复：添加此行导入 uvicorn
+import uvicorn
 from dotenv import load_dotenv, set_key
 from fastapi import FastAPI, HTTPException, Body
 
@@ -15,36 +17,44 @@ from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from mcp.server.sse import SseServerTransport
 
-# --- Environment and Helper Functions ---
+# --- 1. Setup & Configuration ---
+
+# 配置日志系统
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stderr)
+
+# 环境变量文件路径
 ENV_FILE = Path("/tmp") / ".tushare_env"
 
+
+# --- 2. Core Helper Functions ---
+
 def init_env_file():
-    """Initializes the environment file and its directory."""
+    """初始化环境变量文件及其目录。"""
     try:
         ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
         if not ENV_FILE.exists():
             ENV_FILE.touch()
         load_dotenv(ENV_FILE)
     except Exception as e:
-        print(f"ERROR in init_env_file: {e}", file=sys.stderr)
+        logging.error(f"初始化环境文件失败: {e}")
         traceback.print_exc(file=sys.stderr)
 
 def get_tushare_token() -> Optional[str]:
-    """Retrieves the Tushare token from the environment."""
+    """从环境中获取Tushare token。"""
     init_env_file()
     return os.getenv("TUSHARE_TOKEN")
 
 def set_tushare_token(token: str):
-    """Sets the Tushare token in the environment file and tushare config."""
+    """在环境文件中设置Tushare token。"""
     init_env_file()
     try:
         set_key(ENV_FILE, "TUSHARE_TOKEN", token)
         ts.set_token(token)
     except Exception as e:
-        print(f"ERROR in set_tushare_token: {e}", file=sys.stderr)
+        logging.error(f"设置Tushare token失败: {e}")
 
 def _get_stock_name(pro_api_instance, ts_code: str) -> str:
-    """Helper function to get stock name from ts_code."""
+    """根据ts_code获取股票名称的辅助函数。"""
     if not pro_api_instance:
         return ts_code
     try:
@@ -52,28 +62,62 @@ def _get_stock_name(pro_api_instance, ts_code: str) -> str:
         if not df_basic.empty:
             return df_basic.iloc[0]['name']
     except Exception as e:
-        print(f"Warning: Failed to get stock name for {ts_code}: {e}", file=sys.stderr)
+        logging.warning(f"获取股票名称失败 {ts_code}: {e}")
     return ts_code
 
-# --- MCP and FastAPI App Initialization ---
-try:
-    mcp = FastMCP("Tushare Tools New")
-except Exception as e:
-    print(f"ERROR creating FastMCP: {e}", file=sys.stderr)
-    traceback.print_exc(file=sys.stderr)
-    raise
+def _get_latest_report_df(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """从DataFrame中筛选出最新报告期的数据。"""
+    if df.empty:
+        return None
+    latest_end_date = df['end_date'].iloc[0]
+    return df[df['end_date'] == latest_end_date]
 
+
+# --- 3. Decorators for Tools ---
+
+def tushare_tool_handler(func: Callable) -> Callable:
+    """
+    一个用于MCP工具的装饰器，自动处理token获取、API初始化和异常捕获。
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        logging.info(f"调用工具: {func.__name__}，参数: {kwargs}")
+        token_value = get_tushare_token()
+        if not token_value:
+            return "错误：Tushare token 未配置。请先进行配置。"
+        
+        try:
+            pro = ts.pro_api(token_value)
+            # 将pro实例和stock_name作为参数传递给被装饰的函数
+            ts_code = kwargs.get('ts_code')
+            if ts_code:
+                kwargs['stock_name'] = _get_stock_name(pro, ts_code)
+            
+            return func(pro=pro, *args, **kwargs)
+            
+        except Exception as e:
+            logging.error(f"工具 {func.__name__} 执行出错: {e}")
+            traceback.print_exc(file=sys.stderr)
+            return f"查询失败：{str(e)}"
+            
+    return wrapper
+
+
+# --- 4. MCP & FastAPI Initialization ---
+
+mcp = FastMCP("Tushare Tools Optimized")
 app = FastAPI(
-    title="Tushare MCP API (New)",
-    description="A streamlined remote API for Tushare MCP tools via FastAPI.",
-    version="0.1.0"
+    title="Tushare MCP API (Optimized)",
+    description="An optimized remote API for Tushare MCP tools via FastAPI.",
+    version="1.0.0"
 )
 
-# --- Core Tools ---
+
+# --- 5. MCP Tools ---
 
 @mcp.prompt()
 def configure_token() -> str:
-    """Provides a prompt template for configuring the Tushare token."""
+    """提供配置Tushare token的提示模板。"""
     return """请提供您的Tushare API token。
 您可以在 https://tushare.pro/user/token 获取您的token。
 如果您还没有Tushare账号，请先在 https://tushare.pro/register 注册。
@@ -82,387 +126,183 @@ def configure_token() -> str:
 
 @mcp.tool()
 def setup_tushare_token(token: str) -> str:
-    """
-    Sets and verifies the Tushare API token.
-    """
-    print(f"DEBUG: Tool setup_tushare_token called.", file=sys.stderr)
+    """设置并验证Tushare API token。"""
     if not token or not isinstance(token, str):
         return "Token无效，请输入一个有效的字符串。"
     try:
         set_tushare_token(token)
-        # Verify the token by making a simple API call
         ts.pro_api(token)
         return "Token配置成功！您现在可以使用Tushare的API功能了。"
     except Exception as e:
-        print(f"ERROR in setup_tushare_token: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        logging.error(f"Token验证失败: {e}")
         return f"Token配置失败：{e}"
 
 @mcp.tool()
 def check_token_status() -> str:
-    """
-    Checks the status and validity of the configured Tushare token.
-    """
-    print("DEBUG: Tool check_token_status called.", file=sys.stderr)
+    """检查已配置的Tushare token的状态和有效性。"""
     token = get_tushare_token()
     if not token:
         return "未配置Tushare token。请使用 setup_tushare_token 来设置您的token。"
-    
     try:
-        # Explicitly use the token to verify it
         ts.pro_api(token)
         return "Token配置正常，可以使用Tushare API。"
     except Exception as e:
-        print(f"ERROR in check_token_status: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        logging.error(f"Token状态检查失败: {e}")
         return f"Token无效或已过期。错误信息: {e}"
 
 @mcp.tool()
-def get_stock_basic_info(ts_code: str = "", name: str = "") -> str:
-    """
-    获取股票基本信息
+@tushare_tool_handler
+def get_stock_basic_info(pro, ts_code: str = "", name: str = "", **kwargs) -> str:
+    """获取股票基本信息。"""
+    query_params = {}
+    if ts_code: query_params['ts_code'] = ts_code
+    if name: query_params['name'] = name
+    
+    fields = 'ts_code,name,area,industry,list_date,market,exchange,list_status,delist_date'
+    df = pro.stock_basic(**query_params, fields=fields)
 
-    参数:
-        ts_code: 股票代码（如：000001.SZ）
-        name: 股票名称（如：平安银行）
-    """
-    print(f"DEBUG: Tool get_stock_basic_info called with ts_code: '{ts_code}', name: '{name}'.", file=sys.stderr)
-    token_value = get_tushare_token()
-    if not token_value:
-        return "错误：Tushare token 未配置或无法获取。请使用 setup_tushare_token 配置。"
+    if df.empty: return "未找到符合条件的股票"
 
-    try:
-        pro = ts.pro_api(token_value)
-        query_params = {}
-        if ts_code:
-            query_params['ts_code'] = ts_code
-        if name:
-            query_params['name'] = name
+    results = []
+    for _, row in df.head(50).iterrows():
+        parts = [f"股票代码: {row.get('ts_code', 'N/A')}", f"股票名称: {row.get('name', 'N/A')}"]
+        optional = {'area': '所属地区', 'industry': '所属行业', 'list_date': '上市日期', 'market': '市场类型', 'exchange': '交易所', 'list_status': '上市状态', 'delist_date': '退市日期'}
+        for k, label in optional.items():
+            if pd.notna(row.get(k)): parts.append(f"{label}: {row[k]}")
+        results.append("\n".join(parts) + "\n------------------------")
 
-        # select a compact set of useful fields
-        fields = 'ts_code,name,area,industry,list_date,market,exchange,list_status,delist_date'
-        df = pro.stock_basic(**query_params, fields=fields)
-
-        if df is None or df.empty:
-            return "未找到符合条件的股票"
-
-        results = []
-        # limit output size to avoid extremely long responses
-        df_limited = df.head(50)
-        for _, row in df_limited.iterrows():
-            parts = []
-            if 'ts_code' in row and pd.notna(row.get('ts_code')):
-                parts.append(f"股票代码: {row['ts_code']}")
-            if 'name' in row and pd.notna(row.get('name')):
-                parts.append(f"股票名称: {row['name']}")
-            optional = {
-                'area': '所属地区', 'industry': '所属行业', 'list_date': '上市日期',
-                'market': '市场类型', 'exchange': '交易所', 'list_status': '上市状态', 'delist_date': '退市日期'
-            }
-            for k, label in optional.items():
-                if k in row and pd.notna(row.get(k)):
-                    parts.append(f"{label}: {row[k]}")
-            parts.append("------------------------")
-            results.append("\n".join(parts))
-
-        if len(df) > 50:
-            results.append("注意: 结果超过50条，仅显示前50条。如需精确查找请提供 ts_code 或更具体的 name。")
-
-        return "\n".join(results)
-
-    except Exception as e:
-        print(f"ERROR in get_stock_basic_info: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        return f"查询失败：{e}"
+    if len(df) > 50: results.append("注意: 结果超过50条，仅显示前50条。")
+    return "\n".join(results)
 
 @mcp.tool()
-def get_money_flow_for_past_days(ts_code: str, days: int = 30) -> str:
-    """
-    获取指定股票在过去N天内的累计资金净流入情况。
-    注意：此接口需要2000 Tushare积分。
+@tushare_tool_handler
+def get_money_flow_for_past_days(pro, ts_code: str, days: int = 30, stock_name: str = "", **kwargs) -> str:
+    """获取指定股票在过去N天内的累计资金净流入情况。"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    end_date_str, start_date_str = end_date.strftime('%Y%m%d'), start_date.strftime('%Y%m%d')
 
-    参数:
-        ts_code: 股票代码 (例如: 000001.SZ)
-        days: 查询最近多少天的数据 (默认为30天)
-    """
-    print(f"DEBUG: Tool get_money_flow_for_past_days called with ts_code: '{ts_code}', days: {days}.", file=sys.stderr, flush=True)
-    token_value = get_tushare_token()
-    if not token_value:
-        return "错误：Tushare token 未配置。请先进行配置。"
+    df = pro.moneyflow(ts_code=ts_code, start_date=start_date_str, end_date=end_date_str)
+    if df.empty: return f"在 {start_date_str} 到 {end_date_str} 期间未找到 {stock_name} ({ts_code}) 的资金流向数据。"
 
-    try:
-        pro = ts.pro_api(token_value)
-        stock_name = _get_stock_name(pro, ts_code)
+    total_net_vol = df['net_mf_vol'].sum()
+    total_net_amount = df['net_mf_amount'].sum()
 
-        # 计算日期范围
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        end_date_str = end_date.strftime('%Y%m%d')
-        start_date_str = start_date.strftime('%Y%m%d')
-
-        # 调用API
-        df = pro.moneyflow(ts_code=ts_code, start_date=start_date_str, end_date=end_date_str)
-
-        if df.empty:
-            return f"在 {start_date_str} 到 {end_date_str} 期间未找到 {stock_name} ({ts_code}) 的资金流向数据。"
-
-        # 计算总净流入
-        total_net_vol = df['net_mf_vol'].sum()
-        total_net_amount = df['net_mf_amount'].sum()
-
-        # 格式化输出 (已移除总结部分)
-        results = [
-            f"--- {stock_name} ({ts_code}) 最近 {days} 天资金流向统计 ---",
-            f"查询区间: {start_date_str} 至 {end_date_str}",
-            f"累计净流入量: {total_net_vol:,.0f} 手",
-            f"累计净流入额: {total_net_amount:,.2f} 万元"
-        ]
-
-        return "\n".join(results)
-
-    except Exception as e:
-        print(f"DEBUG: ERROR in get_money_flow_for_past_days: {str(e)}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        return f"查询资金流向失败：{str(e)}"
-
+    return "\n".join([
+        f"--- {stock_name} ({ts_code}) 最近 {days} 天资金流向统计 ---",
+        f"查询区间: {start_date_str} 至 {end_date_str}",
+        f"累计净流入量: {total_net_vol:,.0f} 手",
+        f"累计净流入额: {total_net_amount:,.2f} 万元"
+    ])
 
 @mcp.tool()
-def get_top10_holders(ts_code: str, period: str = None) -> str:
-    """
-    获取上市公司前十大股东数据，包括持有数量和占总股本比例。
-    注意：此接口需要2000 Tushare积分。
+@tushare_tool_handler
+def get_top10_holders(pro, ts_code: str, period: str = None, stock_name: str = "", **kwargs) -> str:
+    """获取上市公司前十大股东数据。"""
+    params = {'ts_code': ts_code}
+    if period: params['period'] = period
+    
+    df = pro.top10_holders(**params)
+    df_latest = _get_latest_report_df(df)
+    if df_latest is None: return f"未找到 {stock_name} ({ts_code}) 的前十大股东数据。"
 
-    参数:
-        ts_code: 股票代码 (例如: 600000.SH)
-        period: 报告期 (YYYYMMDD格式，例如: 20231231)。如果未提供，则获取最新数据。
-    """
-    print(f"DEBUG: Tool get_top10_holders called with ts_code: '{ts_code}', period: {period}.", file=sys.stderr, flush=True)
-    token_value = get_tushare_token()
-    if not token_value:
-        return "错误：Tushare token 未配置。请先进行配置。"
-
-    try:
-        pro = ts.pro_api(token_value)
-        stock_name = _get_stock_name(pro, ts_code)
-
-        # 准备API参数
-        params = {'ts_code': ts_code}
-        if period:
-            params['period'] = period
-
-        # 调用API
-        df = pro.top10_holders(**params)
-
-        if df.empty:
-            return f"未找到 {stock_name} ({ts_code}) 的前十大股东数据。"
-
-        # 获取最新的报告期
-        latest_end_date = df['end_date'].iloc[0]
-        df_latest = df[df['end_date'] == latest_end_date]
-
-        # 格式化输出
-        header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大股东 ---"
-        results = [header]
-        for _, row in df_latest.iterrows():
-            holder_info = (
-                f"股东名称: {row['holder_name']}\n"
-                f"  - 持有数量: {row['hold_amount']:,.0f} 股\n"
-                f"  - 占总股本比例: {row['hold_ratio']:.2f}%"
-            )
-            results.append(holder_info)
-
-        return "\n".join(results)
-
-    except Exception as e:
-        print(f"DEBUG: ERROR in get_top10_holders: {str(e)}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        return f"查询前十大股东失败：{str(e)}"
-
+    latest_end_date = df_latest['end_date'].iloc[0]
+    header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大股东 ---"
+    results = [header]
+    for _, row in df_latest.iterrows():
+        results.append(f"股东名称: {row['holder_name']}\n  - 持有数量: {row['hold_amount']:,.0f} 股\n  - 占总股本比例: {row['hold_ratio']:.2f}%")
+    return "\n".join(results)
 
 @mcp.tool()
-def get_top10_float_holders(ts_code: str, period: str = None) -> str:
-    """
-    获取上市公司前十大流通股东数据，包括持有数量和占流通股本比例。
-    注意：此接口需要2000 Tushare积分。
+@tushare_tool_handler
+def get_top10_float_holders(pro, ts_code: str, period: str = None, stock_name: str = "", **kwargs) -> str:
+    """获取上市公司前十大流通股东数据。"""
+    params = {'ts_code': ts_code}
+    if period: params['period'] = period
 
-    参数:
-        ts_code: 股票代码 (例如: 600000.SH)
-        period: 报告期 (YYYYMMDD格式，例如: 20231231)。如果未提供，则获取最新数据。
-    """
-    print(f"DEBUG: Tool get_top10_float_holders called with ts_code: '{ts_code}', period: {period}.", file=sys.stderr, flush=True)
-    token_value = get_tushare_token()
-    if not token_value:
-        return "错误：Tushare token 未配置。请先进行配置。"
+    df = pro.top10_floatholders(**params)
+    df_latest = _get_latest_report_df(df)
+    if df_latest is None: return f"未找到 {stock_name} ({ts_code}) 的前十大流通股东数据。"
 
-    try:
-        pro = ts.pro_api(token_value)
-        stock_name = _get_stock_name(pro, ts_code)
-
-        # 准备API参数
-        params = {'ts_code': ts_code}
-        if period:
-            params['period'] = period
-
-        # 调用API
-        df = pro.top10_floatholders(**params)
-
-        if df.empty:
-            return f"未找到 {stock_name} ({ts_code}) 的前十大流通股东数据。"
-
-        # 获取最新的报告期
-        latest_end_date = df['end_date'].iloc[0]
-        df_latest = df[df['end_date'] == latest_end_date]
-
-        # 格式化输出
-        header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大流通股东 ---"
-        results = [header]
-        for _, row in df_latest.iterrows():
-            holder_info = (
-                f"股东名称: {row['holder_name']}\n"
-                f"  - 持有数量: {row['hold_amount']:,.0f} 股\n"
-                f"  - 占流通股本比例: {row['hold_ratio']:.2f}%"
-            )
-            results.append(holder_info)
-
-        return "\n".join(results)
-
-    except Exception as e:
-        print(f"DEBUG: ERROR in get_top10_float_holders: {str(e)}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        return f"查询前十大流通股东失败：{str(e)}"
-
+    latest_end_date = df_latest['end_date'].iloc[0]
+    header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大流通股东 ---"
+    results = [header]
+    for _, row in df_latest.iterrows():
+        results.append(f"股东名称: {row['holder_name']}\n  - 持有数量: {row['hold_amount']:,.0f} 股\n  - 占流通股本比例: {row['hold_float_ratio']:.2f}%")
+    return "\n".join(results)
 
 @mcp.tool()
-def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: str = None) -> str:
-    """
-    获取上市公司股东在过去N天内的增减持数据。
-    注意：此接口需要2000 Tushare积分。
+@tushare_tool_handler
+def get_shareholder_trades(pro, ts_code: str, days: int = 90, trade_type: str = None, stock_name: str = "", **kwargs) -> str:
+    """获取上市公司股东在过去N天内的增减持数据。"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    params = {'ts_code': ts_code, 'start_date': start_date.strftime('%Y%m%d'), 'end_date': end_date.strftime('%Y%m%d')}
+    if trade_type and trade_type.upper() in ['IN', 'DE']: params['trade_type'] = trade_type.upper()
 
-    参数:
-        ts_code: 股票代码 (例如: 002149.SZ)
-        days: 查询最近多少天的数据 (基于公告日期，默认为90天)
-        trade_type: 交易类型, 'IN'代表增持, 'DE'代表减持。如果未提供，则查询所有类型。
-    """
-    print(f"DEBUG: Tool get_shareholder_trades called with ts_code: '{ts_code}', days: {days}, trade_type: {trade_type}.", file=sys.stderr, flush=True)
-    token_value = get_tushare_token()
-    if not token_value:
-        return "错误：Tushare token 未配置。请先进行配置。"
+    df = pro.stk_holdertrade(**params)
+    if df.empty:
+        trade_type_str = {"IN": "增持", "DE": "减持"}.get(params.get('trade_type'), "")
+        return f"在最近 {days} 天内未找到 {stock_name} ({ts_code}) 的{trade_type_str}记录。"
 
-    try:
-        pro = ts.pro_api(token_value)
-        stock_name = _get_stock_name(pro, ts_code)
-
-        # 计算日期范围
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        end_date_str = end_date.strftime('%Y%m%d')
-        start_date_str = start_date.strftime('%Y%m%d')
-
-        # 准备API参数
-        params = {
-            'ts_code': ts_code,
-            'start_date': start_date_str,
-            'end_date': end_date_str
-        }
-        if trade_type and trade_type.upper() in ['IN', 'DE']:
-            params['trade_type'] = trade_type.upper()
-
-        # 调用API
-        df = pro.stk_holdertrade(**params)
-
-        if df.empty:
-            trade_type_str = ""
-            if trade_type:
-                trade_type_str = "增持" if trade_type.upper() == 'IN' else "减持"
-            return f"在最近 {days} 天内未找到 {stock_name} ({ts_code}) 的{trade_type_str}记录。"
-
-        # 格式化输出
-        header = f"--- {stock_name} ({ts_code}) 最近 {days} 天股东增减持记录 ---"
-        results = [header]
-        for _, row in df.iterrows():
-            trade_action = "增持" if row['in_de'] == 'IN' else "减持"
-            trade_info = (
-                f"公告日期: {row['ann_date']}\n"
-                f"  - 股东名称: {row['holder_name']}\n"
-                f"  - 变动类型: {trade_action}\n"
-                f"  - 变动数量: {row['change_vol']:,.0f} 股\n"
-                f"  - 占流通股比例: {row['change_ratio']:.4f}%\n"
-                f"  - 变动后持股数: {row['after_share']:,.0f} 股\n"
-                f"  - 变动后占流通股比例: {row['after_ratio']:.4f}%"
-            )
-            results.append(trade_info)
-
-        return "\n".join(results)
-
-    except Exception as e:
-        print(f"DEBUG: ERROR in get_shareholder_trades: {str(e)}", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        return f"查询股东增减持失败：{str(e)}"
+    header = f"--- {stock_name} ({ts_code}) 最近 {days} 天股东增减持记录 ---"
+    results = [header]
+    for _, row in df.iterrows():
+        trade_action = "增持" if row['in_de'] == 'IN' else "减持"
+        change_vol_str = f"{row['change_vol']:,.0f}" if pd.notna(row['change_vol']) else "N/A"
+        change_ratio_str = f"{row['change_ratio']:.4f}" if pd.notna(row['change_ratio']) else "N/A"
+        after_share_str = f"{row['after_share']:,.0f}" if pd.notna(row['after_share']) else "N/A"
+        after_ratio_str = f"{row['after_ratio']:.4f}" if pd.notna(row['after_ratio']) else "N/A"
+        results.append(
+            f"公告日期: {row['ann_date']}\n"
+            f"  - 股东名称: {row['holder_name']}\n"
+            f"  - 变动类型: {trade_action}\n"
+            f"  - 变动数量: {change_vol_str} 股\n"
+            f"  - 占流通股比例: {change_ratio_str}%\n"
+            f"  - 变动后持股数: {after_share_str} 股\n"
+            f"  - 变动后占流通股比例: {after_ratio_str}%"
+        )
+    return "\n".join(results)
 
 
-# --- FastAPI Endpoints ---
+# --- 6. FastAPI Endpoints & Server Mounting ---
+
 @app.get("/")
 async def read_root():
-    return {"message": "Hello World - Tushare MCP API (New) is running!"}
+    return {"message": "Hello World - Tushare MCP API (Optimized) is running!"}
 
 @app.post("/tools/setup_tushare_token", summary="Setup Tushare API token")
 async def api_setup_tushare_token(payload: dict = Body(...)):
-    """
-    Sets the Tushare API token via a REST endpoint.
-    Expects a JSON payload: {"token": "your_actual_token_here"}
-    """
+    """通过REST端点设置Tushare API token。"""
     token = payload.get("token")
     if not token or not isinstance(token, str):
-        raise HTTPException(
-            status_code=400, 
-            detail="Missing or invalid 'token' in payload. Expected a JSON object with a 'token' string."
-        )
-
+        raise HTTPException(status_code=400, detail="Payload中缺少或包含无效的'token'。")
     try:
-        # Call the original tool function
         result_message = setup_tushare_token(token=token)
         if "配置成功" in result_message:
             return {"status": "success", "message": result_message}
         else:
-            # Propagate the failure message from the tool
             raise HTTPException(status_code=401, detail=result_message)
     except Exception as e:
-        error_message = f"An unexpected error occurred while setting up the token: {e}"
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=error_message)
+        raise HTTPException(status_code=500, detail=f"设置token时发生意外错误: {e}")
 
-# --- Start of MCP SSE Workaround Integration ---
-MCP_BASE_PATH = "/mcp" # The path where the MCP service will be available
-
+# --- MCP SSE Workaround Integration ---
+MCP_BASE_PATH = "/mcp"
 try:
     messages_full_path = f"{MCP_BASE_PATH}/messages/"
     sse_transport = SseServerTransport(messages_full_path)
-
     async def handle_mcp_sse_handshake(request: Request) -> None:
-        """Handles the initial SSE handshake from the client."""
-        # request._send is a protected member, type: ignore is used.
-        async with sse_transport.connect_sse(
-            request.scope,
-            request.receive,
-            request._send, # type: ignore
-        ) as (read_stream, write_stream):
-            await mcp._mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp._mcp_server.create_initialization_options(),
-            )
-
+        async with sse_transport.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+            await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
     app.add_route(MCP_BASE_PATH, handle_mcp_sse_handshake, methods=["GET"])
     app.mount(messages_full_path, sse_transport.handle_post_message)
-
-except Exception as e_workaround:
-    print(f"DEBUG: CRITICAL ERROR applying MCP SSE workaround: {str(e_workaround)}", file=sys.stderr, flush=True)
+except Exception as e:
+    logging.critical(f"应用MCP SSE workaround时发生严重错误: {e}")
     traceback.print_exc(file=sys.stderr)
-# --- End of MCP SSE Workaround Integration ---
 
 
-# --- Server Execution ---
+# --- 7. Server Execution ---
+
 if __name__ == "__main__":
-    # To run this server: uvicorn server.py:app --host 0.0.0.0 --port 8000 --reload
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
