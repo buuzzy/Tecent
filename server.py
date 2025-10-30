@@ -155,8 +155,13 @@ def check_token_status() -> str:
 
 @mcp.tool()
 @tushare_tool_handler
-def get_stock_basic_info(pro, ts_code: str = "", name: str = "", **kwargs) -> str:
+def get_stock_basic_info(ts_code: str = "", name: str = "", **kwargs) -> str:
     """获取股票基本信息。"""
+    # --- 修复：从kwargs中提取 pro ---
+    if 'pro' not in kwargs:
+        return "错误：装饰器未能注入 'pro' 实例。"
+    pro = kwargs.pop('pro')
+    
     query_params = {}
     if ts_code: query_params['ts_code'] = ts_code
     if name: query_params['name'] = name
@@ -179,8 +184,14 @@ def get_stock_basic_info(pro, ts_code: str = "", name: str = "", **kwargs) -> st
 
 @mcp.tool()
 @tushare_tool_handler
-def get_money_flow_for_past_days(pro, ts_code: str, days: int = 30, stock_name: str = "", **kwargs) -> str:
+def get_money_flow_for_past_days(ts_code: str, days: int = 30, **kwargs) -> str:
     """获取指定股票在过去N天内的累计资金净流入情况。"""
+    # --- 修复：从kwargs中提取 pro 和 stock_name ---
+    if 'pro' not in kwargs:
+        return "错误：装饰器未能注入 'pro' 实例。"
+    pro = kwargs.pop('pro')
+    stock_name = kwargs.pop('stock_name', ts_code) # 使用ts_code作为备选
+    
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
     end_date_str, start_date_str = end_date.strftime('%Y%m%d'), start_date.strftime('%Y%m%d')
@@ -200,8 +211,14 @@ def get_money_flow_for_past_days(pro, ts_code: str, days: int = 30, stock_name: 
 
 @mcp.tool()
 @tushare_tool_handler
-def get_top10_holders(pro, ts_code: str, period: str = None, stock_name: str = "", **kwargs) -> str:
+def get_top10_holders(ts_code: str, period: str = None, **kwargs) -> str:
     """获取上市公司前十大股东数据。"""
+    # --- 修复：从kwargs中提取 pro 和 stock_name ---
+    if 'pro' not in kwargs:
+        return "错误：装饰器未能注入 'pro' 实例。"
+    pro = kwargs.pop('pro')
+    stock_name = kwargs.pop('stock_name', ts_code)
+    
     params = {'ts_code': ts_code}
     if period: params['period'] = period
     
@@ -218,8 +235,14 @@ def get_top10_holders(pro, ts_code: str, period: str = None, stock_name: str = "
 
 @mcp.tool()
 @tushare_tool_handler
-def get_top10_float_holders(pro, ts_code: str, period: str = None, stock_name: str = "", **kwargs) -> str:
+def get_top10_float_holders(ts_code: str, period: str = None, **kwargs) -> str:
     """获取上市公司前十大流通股东数据。"""
+    # --- 修复：从kwargs中提取 pro 和 stock_name ---
+    if 'pro' not in kwargs:
+        return "错误：装饰器未能注入 'pro' 实例。"
+    pro = kwargs.pop('pro')
+    stock_name = kwargs.pop('stock_name', ts_code)
+    
     params = {'ts_code': ts_code}
     if period: params['period'] = period
 
@@ -236,8 +259,14 @@ def get_top10_float_holders(pro, ts_code: str, period: str = None, stock_name: s
 
 @mcp.tool()
 @tushare_tool_handler
-def get_shareholder_trades(pro, ts_code: str, days: int = 90, trade_type: str = None, stock_name: str = "", **kwargs) -> str:
+def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: str = None, **kwargs) -> str:
     """获取上市公司股东在过去N天内的增减持数据。"""
+    # --- 修复：从kwargs中提取 pro 和 stock_name ---
+    if 'pro' not in kwargs:
+        return "错误：装饰器未能注入 'pro' 实例。"
+    pro = kwargs.pop('pro')
+    stock_name = kwargs.pop('stock_name', ts_code)
+    
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
     params = {'ts_code': ts_code, 'start_date': start_date.strftime('%Y%m%d'), 'end_date': end_date.strftime('%Y%m%d')}
