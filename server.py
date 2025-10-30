@@ -3,6 +3,7 @@ import traceback
 import os
 import logging
 import functools
+import inspect  
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Callable
@@ -73,13 +74,31 @@ def _get_latest_report_df(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     return df[df['end_date'] == latest_end_date]
 
 
-# --- 3. Decorators for Tools ---
+# --- 3. Decorators for Tools ---  <--- 2. 替换此整个部分
 
 def tushare_tool_handler(func: Callable) -> Callable:
     """
     一个用于MCP工具的装饰器，自动处理token获取、API初始化和异常捕获。
+    
+    此装饰器包含一个关键修复：
+    它会创建一个 *不含* **kwargs 的新函数签名，
+    并将其提供给 @mcp.tool()，以绕过 fastmcp 中导致"缺少 kwargs"错误的Bug。
     """
-    @functools.wraps(func)
+    
+    # 获取原始函数（例如 get_money_flow_for_past_days）的真实签名
+    original_sig = inspect.signature(func)
+    
+    # 过滤掉 **kwargs (类型为 VAR_KEYWORD) 参数
+    new_params = []
+    for name, param in original_sig.parameters.items():
+        if param.kind == param.VAR_KEYWORD: # 这就是 **kwargs
+            continue # 跳过它，不添加到新签名中
+        new_params.append(param)
+    
+    # 创建一个不含 **kwargs 的“净化版”签名
+    wrapper_sig = original_sig.replace(parameters=new_params)
+
+    # 我们 *不能* 使用 @functools.wraps(func)，因为它会复制包含Bug的签名
     def wrapper(*args, **kwargs):
         logging.info(f"调用工具: {func.__name__}，参数: {kwargs}")
         token_value = get_tushare_token()
@@ -95,13 +114,18 @@ def tushare_tool_handler(func: Callable) -> Callable:
             if ts_code:
                 kwargs['stock_name'] = _get_stock_name(pro, ts_code)
             
-            # 使用更新后的kwargs调用函数
+            # 使用更新后的kwargs调用原始函数 (原始函数 *可以* 处理 **kwargs)
             return func(*args, **kwargs)
             
         except Exception as e:
             logging.error(f"工具 {func.__name__} 执行出错: {e}")
             traceback.print_exc(file=sys.stderr)
             return f"查询失败：{str(e)}"
+
+    # 手动将元数据（和 *净化后* 的签名）赋给 wrapper
+    wrapper.__name__ = func.__name__
+    wrapper.__doc__ = func.__doc__
+    wrapper.__signature__ = wrapper_sig # <--- 这就是绕过Bug的关键
             
     return wrapper
 
@@ -116,7 +140,7 @@ app = FastAPI(
 )
 
 
-# --- 5. MCP Tools ---
+# --- 5. MCP Tools --- (这部分已在上一轮修复，保持不变)
 
 @mcp.prompt()
 def configure_token() -> str:
