@@ -297,7 +297,7 @@ async def api_setup_tushare_token(payload: dict = Body(...)):
         raise HTTPException(status_code=500, detail=f"设置token时发生意外错误: {e}")
 
 # --- MCP SSE Workaround Integration ---
-MCP_BASE_PATH = "/mcp"
+MCP_BASE_PATH = "/sse"
 try:
     messages_full_path = f"{MCP_BASE_PATH}/messages/"
     sse_transport = SseServerTransport(messages_full_path)
