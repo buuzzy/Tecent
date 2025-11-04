@@ -125,7 +125,7 @@ def tushare_tool_handler(func: Callable) -> Callable:
     # 手动将元数据（和 *净化后* 的签名）赋给 wrapper
     wrapper.__name__ = func.__name__
     wrapper.__doc__ = func.__doc__
-    wrapper.__signature__ = wrapper_sig # <--- 这就是绕过Bug的关键
+    wrapper.__signature__ = wrapper_sig # type: ignore # <--- 这就是绕过Bug的关键
             
     return wrapper
 
@@ -235,8 +235,11 @@ def get_money_flow_for_past_days(ts_code: str, days: int = 30, **kwargs) -> str:
 
 @mcp.tool()
 @tushare_tool_handler
-def get_top10_holders(ts_code: str, period: str = None, **kwargs) -> str:
-    """获取上市公司前十大股东数据。"""
+def get_top10_holders(ts_code: str, end_date: Optional[str] = None, **kwargs) -> str:
+    """
+    获取上市公司前十大股东数据。
+    可以指定一个截止日期(end_date, 格式YYYYMMDD)，获取该日期或之前最新的报告期数据。
+    """
     # --- 修复：从kwargs中提取 pro 和 stock_name ---
     if 'pro' not in kwargs:
         return "错误：装饰器未能注入 'pro' 实例。"
@@ -244,11 +247,14 @@ def get_top10_holders(ts_code: str, period: str = None, **kwargs) -> str:
     stock_name = kwargs.pop('stock_name', ts_code)
     
     params = {'ts_code': ts_code}
-    if period: params['period'] = period
+    if end_date: 
+        params['end_date'] = end_date
     
     df = pro.top10_holders(**params)
     df_latest = _get_latest_report_df(df)
-    if df_latest is None: return f"未找到 {stock_name} ({ts_code}) 的前十大股东数据。"
+    if df_latest is None: 
+        date_str = f" {end_date} 或之前" if end_date else ""
+        return f"未找到 {stock_name} ({ts_code}){date_str}的前十大股东数据。"
 
     latest_end_date = df_latest['end_date'].iloc[0]
     header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大股东 ---"
@@ -259,8 +265,11 @@ def get_top10_holders(ts_code: str, period: str = None, **kwargs) -> str:
 
 @mcp.tool()
 @tushare_tool_handler
-def get_top10_float_holders(ts_code: str, period: str = None, **kwargs) -> str:
-    """获取上市公司前十大流通股东数据。"""
+def get_top10_float_holders(ts_code: str, end_date: Optional[str] = None, **kwargs) -> str:
+    """
+    获取上市公司前十大流通股东数据。
+    可以指定一个截止日期(end_date, 格式YYYYMMDD)，获取该日期或之前最新的报告期数据。
+    """
     # --- 修复：从kwargs中提取 pro 和 stock_name ---
     if 'pro' not in kwargs:
         return "错误：装饰器未能注入 'pro' 实例。"
@@ -268,11 +277,14 @@ def get_top10_float_holders(ts_code: str, period: str = None, **kwargs) -> str:
     stock_name = kwargs.pop('stock_name', ts_code)
     
     params = {'ts_code': ts_code}
-    if period: params['period'] = period
+    if end_date: 
+        params['end_date'] = end_date
 
     df = pro.top10_floatholders(**params)
     df_latest = _get_latest_report_df(df)
-    if df_latest is None: return f"未找到 {stock_name} ({ts_code}) 的前十大流通股东数据。"
+    if df_latest is None: 
+        date_str = f" {end_date} 或之前" if end_date else ""
+        return f"未找到 {stock_name} ({ts_code}){date_str}的前十大流通股东数据。"
 
     latest_end_date = df_latest['end_date'].iloc[0]
     header = f"--- {stock_name} ({ts_code}) 报告期 {latest_end_date} 前十大流通股东 ---"
@@ -283,7 +295,7 @@ def get_top10_float_holders(ts_code: str, period: str = None, **kwargs) -> str:
 
 @mcp.tool()
 @tushare_tool_handler
-def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: str = None, **kwargs) -> str:
+def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: Optional[str] = None, **kwargs) -> str:
     """获取上市公司股东在过去N天内的增减持数据。"""
     # --- 修复：从kwargs中提取 pro 和 stock_name ---
     if 'pro' not in kwargs:
@@ -305,8 +317,13 @@ def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: str = None,
 
     df = pro.stk_holdertrade(**params)
     if df.empty:
-        trade_type_str = {"IN": "增持", "DE": "减持"}.get(params.get('trade_type'), "")
-        return f"在最近 {days} 天内未找到 {stock_name} ({ts_code}) 的{trade_type_str}记录。"
+        trade_type_key = params.get('trade_type')
+        trade_type_str = ""
+        if trade_type_key:
+            trade_type_str = {"IN": "增持", "DE": "减持"}.get(trade_type_key, "")
+        
+        message_suffix = f"的{trade_type_str}记录" if trade_type_str else "的增减持记录"
+        return f"在最近 {days} 天内未找到 {stock_name} ({ts_code}){message_suffix}。"
 
     header = f"--- {stock_name} ({ts_code}) 最近 {days} 天股东增减持记录 ---"
     results = [header]
@@ -354,11 +371,28 @@ MCP_BASE_PATH = "/sse"
 try:
     messages_full_path = f"{MCP_BASE_PATH}/messages/"
     sse_transport = SseServerTransport(messages_full_path)
+
     async def handle_mcp_sse_handshake(request: Request) -> None:
-        async with sse_transport.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
-            await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
-    app.add_route(MCP_BASE_PATH, handle_mcp_sse_handshake, methods=["GET"])
+        """
+        处理 MCP 的 SSE 握手。
+        此函数不返回任何值，因为 sse_transport 会完全接管响应流。
+        静态类型检查器会因此报错，所以我们使用 # type: ignore。
+        """
+        async with sse_transport.connect_sse(
+            request.scope, 
+            request.receive, 
+            request._send
+        ) as (read_stream, write_stream):
+            await mcp._mcp_server.run(
+                read_stream, 
+                write_stream, 
+                mcp._mcp_server.create_initialization_options()
+            )
+            
+    app.add_route(MCP_BASE_PATH, handle_mcp_sse_handshake, methods=["GET"]) # type: ignore
     app.mount(messages_full_path, sse_transport.handle_post_message)
+    logging.info("MCP SSE 集成设置完成")
+    
 except Exception as e:
     logging.critical(f"应用MCP SSE workaround时发生严重错误: {e}")
     traceback.print_exc(file=sys.stderr)
