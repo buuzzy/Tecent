@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Callable
 
-import tushare as ts
+import tinyshare as ts
 import pandas as pd
 import uvicorn
 from dotenv import load_dotenv, set_key
@@ -24,7 +24,7 @@ from mcp.server.sse import SseServerTransport
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stderr)
 
 # 环境变量文件路径
-ENV_FILE = Path("/tmp") / ".tushare_env"
+ENV_FILE = Path("/tmp") / ".tinyshare_env"
 
 
 # --- 2. Core Helper Functions ---
@@ -40,19 +40,19 @@ def init_env_file():
         logging.error(f"初始化环境文件失败: {e}")
         traceback.print_exc(file=sys.stderr)
 
-def get_tushare_token() -> Optional[str]:
-    """从环境中获取Tushare token。"""
+def get_tinyshare_token() -> Optional[str]:
+    """从环境中获取Tinyshare token。"""
     init_env_file()
-    return os.getenv("TUSHARE_TOKEN")
+    return os.getenv("TINYSHARE_TOKEN")
 
-def set_tushare_token(token: str):
-    """在环境文件中设置Tushare token。"""
+def set_tinyshare_token(token: str):
+    """在环境文件中设置Tinyshare token。"""
     init_env_file()
     try:
-        set_key(ENV_FILE, "TUSHARE_TOKEN", token)
+        set_key(ENV_FILE, "TINYSHARE_TOKEN", token)
         ts.set_token(token)
     except Exception as e:
-        logging.error(f"设置Tushare token失败: {e}")
+        logging.error(f"设置Tinyshare token失败: {e}")
 
 def _get_stock_name(pro_api_instance, ts_code: str) -> str:
     """根据ts_code获取股票名称的辅助函数。"""
@@ -76,7 +76,7 @@ def _get_latest_report_df(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 # --- 3. Decorators for Tools ---  <--- 2. 替换此整个部分
 
-def tushare_tool_handler(func: Callable) -> Callable:
+def tinyshare_tool_handler(func: Callable) -> Callable:
     """
     一个用于MCP工具的装饰器，自动处理token获取、API初始化和异常捕获。
     
@@ -101,9 +101,9 @@ def tushare_tool_handler(func: Callable) -> Callable:
     # 我们 *不能* 使用 @functools.wraps(func)，因为它会复制包含Bug的签名
     def wrapper(*args, **kwargs):
         logging.info(f"调用工具: {func.__name__}，参数: {kwargs}")
-        token_value = get_tushare_token()
+        token_value = get_tinyshare_token()
         if not token_value:
-            return "错误：Tushare token 未配置。请先进行配置。"
+            return "错误：Tinyshare token 未配置。请先进行配置。"
         
         try:
             pro = ts.pro_api(token_value)
@@ -132,10 +132,10 @@ def tushare_tool_handler(func: Callable) -> Callable:
 
 # --- 4. MCP & FastAPI Initialization ---
 
-mcp = FastMCP("Tushare Tools Optimized")
+mcp = FastMCP("Tinyshare Tools Optimized")
 app = FastAPI(
-    title="Tushare MCP API (Optimized)",
-    description="An optimized remote API for Tushare MCP tools via FastAPI.",
+    title="Tinyshare MCP API (Optimized)",
+    description="An optimized remote API for Tinyshare MCP tools via FastAPI.",
     version="1.0.0"
 )
 
@@ -144,41 +144,40 @@ app = FastAPI(
 
 @mcp.prompt()
 def configure_token() -> str:
-    """提供配置Tushare token的提示模板。"""
-    return """请提供您的Tushare API token。
-您可以在 https://tushare.pro/user/token 获取您的token。
-如果您还没有Tushare账号，请先在 https://tushare.pro/register 注册。
+    """提供配置Tinyshare token的提示模板。"""
+    return """请提供您的Tinyshare API token。
+如果您还没有Tinyshare账号，请先注册。
 
 请输入您的token:"""
 
 @mcp.tool()
-def setup_tushare_token(token: str) -> str:
-    """设置并验证Tushare API token。"""
+def setup_tinyshare_token(token: str) -> str:
+    """设置并验证Tinyshare API token。"""
     if not token or not isinstance(token, str):
         return "Token无效，请输入一个有效的字符串。"
     try:
-        set_tushare_token(token)
+        set_tinyshare_token(token)
         ts.pro_api(token)
-        return "Token配置成功！您现在可以使用Tushare的API功能了。"
+        return "Token配置成功！您现在可以使用Tinyshare的API功能了。"
     except Exception as e:
         logging.error(f"Token验证失败: {e}")
         return f"Token配置失败：{e}"
 
 @mcp.tool()
 def check_token_status() -> str:
-    """检查已配置的Tushare token的状态和有效性。"""
-    token = get_tushare_token()
+    """检查已配置的Tinyshare token的状态和有效性。"""
+    token = get_tinyshare_token()
     if not token:
-        return "未配置Tushare token。请使用 setup_tushare_token 来设置您的token。"
+        return "未配置Tinyshare token。请使用 setup_tinyshare_token 来设置您的token。"
     try:
         ts.pro_api(token)
-        return "Token配置正常，可以使用Tushare API。"
+        return "Token配置正常，可以使用Tinyshare API。"
     except Exception as e:
         logging.error(f"Token状态检查失败: {e}")
         return f"Token无效或已过期。错误信息: {e}"
 
 @mcp.tool()
-@tushare_tool_handler
+@tinyshare_tool_handler
 def get_stock_basic_info(ts_code: str = "", name: str = "", **kwargs) -> str:
     """获取股票基本信息。"""
     # --- 修复：从kwargs中提取 pro ---
@@ -207,7 +206,7 @@ def get_stock_basic_info(ts_code: str = "", name: str = "", **kwargs) -> str:
     return "\n".join(results)
 
 @mcp.tool()
-@tushare_tool_handler
+@tinyshare_tool_handler
 def get_money_flow_for_past_days(ts_code: str, days: int = 30, **kwargs) -> str:
     """获取指定股票在过去N天内的累计资金净流入情况。"""
     # --- 修复：从kwargs中提取 pro 和 stock_name ---
@@ -234,7 +233,7 @@ def get_money_flow_for_past_days(ts_code: str, days: int = 30, **kwargs) -> str:
     ])
 
 @mcp.tool()
-@tushare_tool_handler
+@tinyshare_tool_handler
 def get_top10_holders(ts_code: str, end_date: Optional[str] = None, **kwargs) -> str:
     """
     获取上市公司前十大股东数据。
@@ -264,7 +263,7 @@ def get_top10_holders(ts_code: str, end_date: Optional[str] = None, **kwargs) ->
     return "\n".join(results)
 
 @mcp.tool()
-@tushare_tool_handler
+@tinyshare_tool_handler
 def get_top10_float_holders(ts_code: str, end_date: Optional[str] = None, **kwargs) -> str:
     """
     获取上市公司前十大流通股东数据。
@@ -294,7 +293,7 @@ def get_top10_float_holders(ts_code: str, end_date: Optional[str] = None, **kwar
     return "\n".join(results)
 
 @mcp.tool()
-@tushare_tool_handler
+@tinyshare_tool_handler
 def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: Optional[str] = None, **kwargs) -> str:
     """获取上市公司股东在过去N天内的增减持数据。"""
     # --- 修复：从kwargs中提取 pro 和 stock_name ---
@@ -349,16 +348,16 @@ def get_shareholder_trades(ts_code: str, days: int = 90, trade_type: Optional[st
 
 @app.get("/")
 async def read_root():
-    return {"message": "Hello World - Tushare MCP API (Optimized) is running!"}
+    return {"message": "Hello World - Tinyshare MCP API (Optimized) is running!"}
 
-@app.post("/tools/setup_tushare_token", summary="Setup Tushare API token")
-async def api_setup_tushare_token(payload: dict = Body(...)):
-    """通过REST端点设置Tushare API token。"""
+@app.post("/tools/setup_tinyshare_token", summary="Setup Tinyshare API token")
+async def api_setup_tinyshare_token(payload: dict = Body(...)):
+    """通过REST端点设置Tinyshare API token。"""
     token = payload.get("token")
     if not token or not isinstance(token, str):
         raise HTTPException(status_code=400, detail="Payload中缺少或包含无效的'token'。")
     try:
-        result_message = setup_tushare_token(token=token)
+        result_message = setup_tinyshare_token(token=token)
         if "配置成功" in result_message:
             return {"status": "success", "message": result_message}
         else:
